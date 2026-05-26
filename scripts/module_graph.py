@@ -91,10 +91,22 @@ VIEW_LANES: list[dict[str, Any]] = [
     {"id": "mem", "label": "NvM · Mem", "members": ["NvM", "MemIf", "Fee", "Fls", "Dem", "FiM", "KeyM", "Csm", "CryIf"]},
 ]
 
-# Reference paths (AUTOSAR classic — for highlight only)
-PATH_DIAG_CAN = ["CanTrcv", "Can", "CanIf", "CanTp", "PduR", "Dcm", "Rte"]
-PATH_COM_CAN = ["CanTrcv", "Can", "CanIf", "PduR", "Com", "Rte"]
-PATH_GATEWAY = ["Gateway", "PduR", "Com"]
+# Communication path discovery (from workspace scan — not fixed templates)
+COMM_SINKS = frozenset({"Com", "Dcm", "Rte", "Dem", "IpduM"})
+COMM_SOURCE_MAX_TIER = 2
+PATH_MAX_LEN = 12
+PATH_MAX_COUNT = 24
+
+CAN_BUS = frozenset({"CanTrcv", "Can", "CanIf", "CanTp", "CanSM", "CanNm", "CanCM"})
+LIN_BUS = frozenset({"LinIf", "LinTp"})
+ETH_BUS = frozenset({"SoAd", "DoIP"})
+
+# Legacy spine / neighbor hints only (not used for path pills)
+SPINE_REFERENCE_CHAINS: list[list[str]] = [
+    ["CanTrcv", "Can", "CanIf", "CanTp", "PduR", "Dcm", "Rte"],
+    ["CanTrcv", "Can", "CanIf", "PduR", "Com", "Rte"],
+    ["Gateway", "PduR", "Com"],
+]
 
 # AUTOSAR layered model (stacks = vertical columns, bottom → top within column)
 AUTOSAR_STACKS: list[dict[str, Any]] = [
@@ -225,12 +237,70 @@ def discover_modules(workspace: Path) -> dict[str, dict[str, Any]]:
     return modules
 
 
-def _scan_file_links(path: Path, source_module: str) -> set[tuple[str, str, str]]:
-    """Return set of (from, to, kind) edges."""
-    edges: set[tuple[str, str, str]] = set()
+# 통신 경로 분석에 필요한 모듈만 ARXML 전문 스캔 (나머지는 STACK_CHAINS만)
+_ROUTING_SCAN_MODULES = frozenset(
+    {
+        "PduR",
+        "Gateway",
+        "Com",
+        "CanIf",
+        "CanTp",
+        "Dcm",
+        "LinIf",
+        "LinTp",
+        "IpduM",
+        "SoAd",
+        "DoIP",
+        "CDD_Router",
+        "EcuC",
+    }
+)
+
+_file_text_cache: dict[str, tuple[float, str]] = {}
+
+
+def _read_arxml_text(path: Path) -> str:
+    key = str(path.resolve())
+    try:
+        mtime = path.stat().st_mtime
+    except OSError:
+        return ""
+    cached = _file_text_cache.get(key)
+    if cached and cached[0] == mtime:
+        return cached[1]
     try:
         text = path.read_text(encoding="utf-8", errors="replace")
     except OSError:
+        return ""
+    _file_text_cache[key] = (mtime, text)
+    return text
+
+
+def _scan_file_links(path: Path, source_module: str) -> set[tuple[str, str, str]]:
+    """Return set of (from, to, kind) edges."""
+    edges: set[tuple[str, str, str]] = set()
+    if source_module not in _ROUTING_SCAN_MODULES:
+        return edges
+
+    text = _read_arxml_text(path)
+    if not text:
+        return edges
+
+    if source_module == "PduR":
+        for hint in (
+            "Dcm",
+            "Com",
+            "CanIf",
+            "CanTp",
+            "IpduM",
+            "LinIf",
+            "SoAd",
+            "DoIP",
+            "Gateway",
+            "CDD_Router",
+        ):
+            if f"PduR_{hint}IPdu" in text or f"_{hint}IPdu" in text:
+                edges.add(("PduR", hint, "routing"))
         return edges
 
     for m in MODULE_IN_PATH.finditer(text):
@@ -242,11 +312,6 @@ def _scan_file_links(path: Path, source_module: str) -> set[tuple[str, str, str]
         hint = m.group(1)
         if hint and hint != source_module:
             edges.add((source_module, hint, "routing"))
-
-    if source_module == "PduR":
-        for hint in ("Dcm", "Com", "CanIf", "CanTp", "IpduM", "LinIf", "SoAd", "DoIP"):
-            if f"PduR_{hint}IPdu" in text or f"_{hint}IPdu" in text:
-                edges.add(("PduR", hint, "routing"))
 
     return edges
 
@@ -306,7 +371,7 @@ def _build_base_graph(workspace: Path) -> dict[str, Any]:
     ]
 
     lanes, spine, other_count = _build_lane_view(modules, names)
-    autosar = _build_autosar_layer_view(modules, names, workspace)
+    autosar = _build_autosar_layer_view(modules, names, workspace, normalized)
 
     return {
         "workspace": str(workspace),
@@ -323,8 +388,190 @@ def _build_base_graph(workspace: Path) -> dict[str, Any]:
     }
 
 
+def _build_adjacency(
+    names: set[str], edges: set[tuple[str, str, str]]
+) -> dict[str, set[str]]:
+    """Path walking uses stack + routing only (REF edges create unrealistic jumps)."""
+    adj: dict[str, set[str]] = {n: set() for n in names}
+    for fr, to, kind in edges:
+        if kind in ("stack", "routing"):
+            adj.setdefault(fr, set()).add(to)
+    return adj
+
+
+def _is_valid_comm_chain(chain: list[str]) -> bool:
+    if len(chain) < 2:
+        return False
+    service = [m for m in chain if m in ("Com", "Dcm", "IpduM")]
+    if len(service) > 1:
+        if not ("Dem" in chain and "Dcm" in chain and "Com" not in chain):
+            return False
+    return True
+
+
+def _is_subsequence(short: tuple[str, ...], long: tuple[str, ...]) -> bool:
+    if len(short) >= len(long):
+        return False
+    it = iter(long)
+    return all(any(x == y for y in it) for x in short)
+
+
+def _dedupe_comm_paths(paths: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Keep longest path per label; drop strict subpaths."""
+    by_label: dict[str, list[dict[str, Any]]] = {}
+    for p in paths:
+        label = p["title"].split(":", 1)[0]
+        by_label.setdefault(label, []).append(p)
+
+    out: list[dict[str, Any]] = []
+    for label, group in by_label.items():
+        group.sort(key=lambda p: len(p["modules"]), reverse=True)
+        kept: list[tuple[str, ...]] = []
+        for p in group:
+            mods = tuple(p["modules"])
+            if any(_is_subsequence(mods, k) for k in kept):
+                continue
+            kept.append(mods)
+            out.append(p)
+    out.sort(key=_path_sort_key)
+    return out
+
+
+def _path_sources(names: set[str], adj: dict[str, set[str]]) -> list[str]:
+    """Entry modules for comm paths (bus / gateway / orphan PduR)."""
+    sources: set[str] = set()
+    for n in names:
+        if LAYER_TIER.get(n, 9) <= COMM_SOURCE_MAX_TIER:
+            sources.add(n)
+        if n == "Gateway":
+            sources.add(n)
+    pdu_tier = LAYER_TIER.get("PduR", 3)
+    for n in ("PduR", "IpduM"):
+        if n not in names:
+            continue
+        has_lower_in = any(
+            LAYER_TIER.get(pred, 9) < pdu_tier and n in adj.get(pred, set())
+            for pred in names
+        )
+        if not has_lower_in:
+            sources.add(n)
+    for n in ("NvM", "Dem", "ComM", "CanNm"):
+        if n in names and not any(n in adj.get(pred, set()) for pred in names):
+            sources.add(n)
+    return sorted(sources, key=lambda x: (LAYER_TIER.get(x, 0), x))
+
+
+def _label_comm_path(chain: list[str]) -> str:
+    has_can = any(m in chain for m in CAN_BUS)
+    has_lin = any(m in chain for m in LIN_BUS)
+    has_eth = any(m in chain for m in ETH_BUS)
+
+    if chain and chain[0] == "Gateway":
+        return "Gateway"
+    if "Dcm" in chain:
+        if has_lin:
+            return "LIN 진단"
+        if has_eth:
+            return "진단 (DoIP/Eth)"
+        if "CanTp" in chain:
+            return "진단 (UDS/CAN)"
+        if has_can:
+            return "진단 (CAN)"
+        return "진단"
+    if "Com" in chain:
+        if has_lin:
+            return "LIN (COM)"
+        if has_eth:
+            return "Ethernet (COM)"
+        if has_can:
+            return "신호 (COM)"
+        return "COM"
+    if "IpduM" in chain:
+        return "IpduM"
+    if "Dem" in chain:
+        return "Dem · Dcm"
+    if set(chain) <= {"NvM", "MemIf", "Fee", "Fls", "Ea"}:
+        return "NvM · Flash"
+    if "ComM" in chain:
+        return "ComM"
+    return "통신 경로"
+
+
+def _path_sort_key(path: dict[str, Any]) -> tuple[int, int, str]:
+    title = path.get("title", "")
+    for i, prefix in enumerate(
+        ("진단", "신호", "Gateway", "LIN", "Ethernet", "IpduM", "Dem", "NvM", "ComM")
+    ):
+        if title.startswith(prefix):
+            return (i, -len(path.get("modules", [])), title)
+    return (99, -len(path.get("modules", [])), title)
+
+
+def _discover_comm_paths(
+    names: set[str],
+    edges: set[tuple[str, str, str]],
+) -> list[dict[str, Any]]:
+    """
+    Discover communication paths by walking edges from workspace ARXML scan.
+    Edges come from STACK_CHAINS (present modules only) + REF/routing hints in Ecud files.
+    """
+    adj = _build_adjacency(names, edges)
+    sources = _path_sources(names, adj)
+    paths: list[dict[str, Any]] = []
+    seen: set[tuple[str, ...]] = set()
+
+    def register(chain: list[str]) -> None:
+        if not _is_valid_comm_chain(chain):
+            return
+        key = tuple(chain)
+        if key in seen:
+            return
+        seen.add(key)
+        label = _label_comm_path(chain)
+        arrow = " → ".join(chain)
+        paths.append(
+            {
+                "id": f"path_{len(paths)}",
+                "title": f"{label}: {arrow}",
+                "modules": list(chain),
+                "source": "workspace_scan",
+            }
+        )
+
+    def dfs(node: str, chain: list[str], visited: set[str]) -> None:
+        if len(chain) > PATH_MAX_LEN:
+            return
+        nexts = [
+            nxt
+            for nxt in sorted(adj.get(node, ()), key=lambda x: (LAYER_TIER.get(x, 0), x))
+            if nxt not in visited
+            and LAYER_TIER.get(nxt, 5) >= LAYER_TIER.get(node, 5)
+        ]
+        if node == "Rte":
+            if len(chain) >= 2:
+                register(chain)
+            return
+        if node in ("Com", "Dcm", "Dem", "IpduM") and len(chain) >= 2 and not nexts:
+            register(chain)
+        if node in ("Com", "Dcm") and len(chain) >= 2:
+            if "Rte" not in adj.get(node, set()) and not nexts:
+                register(chain)
+        for nxt in nexts:
+            dfs(nxt, chain + [nxt], visited | {nxt})
+        if node in ("Com", "Dcm") and "Rte" in adj.get(node, set()) and "Rte" not in visited:
+            dfs("Rte", chain + ["Rte"], visited | {"Rte"})
+
+    for src in sources:
+        dfs(src, [src], {src})
+
+    return _dedupe_comm_paths(paths)[:PATH_MAX_COUNT]
+
+
 def _build_autosar_layer_view(
-    modules: dict[str, dict[str, Any]], names: set[str], workspace: Path
+    modules: dict[str, dict[str, Any]],
+    names: set[str],
+    workspace: Path,
+    edges: set[tuple[str, str, str]],
 ) -> dict[str, Any]:
     assigned: set[str] = set()
     stacks_out: list[dict[str, Any]] = []
@@ -357,15 +604,7 @@ def _build_autosar_layer_view(
     other = sorted(n for n in names if n not in assigned)
     other_mods = [_module_chip(m, modules[m]) for m in other]
 
-    paths = []
-    for pid, chain, title in (
-        ("diag", PATH_DIAG_CAN, "진단 (UDS/CAN): CanTrcv → Can → CanIf → CanTp → PduR → Dcm → Rte"),
-        ("com", PATH_COM_CAN, "신호 (COM): CanTrcv → Can → CanIf → PduR → Com → Rte"),
-        ("gw", PATH_GATEWAY, "Gateway: Gateway → PduR → Com"),
-    ):
-        present = [m for m in chain if m in names]
-        if len(present) >= 2:
-            paths.append({"id": pid, "title": title, "modules": present})
+    paths = _discover_comm_paths(names, edges)
 
     app_mods = _discover_app_components(workspace)
 
@@ -375,6 +614,7 @@ def _build_autosar_layer_view(
         "stacks": stacks_out,
         "bands": LAYER_BANDS,
         "paths": paths,
+        "paths_source": "workspace_scan",
         "other": other_mods,
         "other_count": len(other_mods),
     }
@@ -449,10 +689,11 @@ def _module_chip(name: str, info: dict[str, Any]) -> dict[str, Any]:
 
 
 def _pick_spine(names: set[str]) -> list[dict[str, Any]]:
-    present = [m for m in PATH_DIAG_CAN if m in names]
-    if len(present) < 3:
-        present = [m for m in PATH_COM_CAN if m in names]
-    return [{"module": m, "label": m} for m in present]
+    for chain in SPINE_REFERENCE_CHAINS:
+        present = [m for m in chain if m in names]
+        if len(present) >= 3:
+            return [{"module": m, "label": m} for m in present]
+    return []
 
 
 def build_module_graph(
@@ -569,7 +810,7 @@ def _apply_chip_highlight(
 
 def _is_neighbor_simple(sel: str, name: str) -> bool:
     """Loose neighbor for layer view."""
-    for chain in (PATH_DIAG_CAN, PATH_COM_CAN, PATH_GATEWAY):
+    for chain in SPINE_REFERENCE_CHAINS:
         if sel in chain and name in chain:
             return True
     return False

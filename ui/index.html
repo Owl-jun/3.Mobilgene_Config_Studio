@@ -20,12 +20,17 @@
           placeholder="Mobilgene 워크스페이스 루트 경로 (예: .../rgw_working)"
           spellcheck="false"
         />
-        <button type="button" class="btn" id="btn-open">워크스페이스 열기</button>
+        <button type="button" class="btn btn-ghost" id="btn-browse" title="폴더 찾아보기">찾아보기</button>
+        <button type="button" class="btn" id="btn-open">열기</button>
       </form>
       <div class="header-actions">
         <button type="button" class="btn btn-ghost" id="btn-theme" title="테마 전환">☀</button>
       </div>
       <span class="status-bar" id="status-bar">준비</span>
+      <div id="workspace-loading" class="workspace-loading hidden" aria-live="polite">
+        <div class="view-loading-spinner" aria-hidden="true"></div>
+        <span class="workspace-loading-msg">워크스페이스 분석 중…</span>
+      </div>
     </header>
 
     <main class="main-panels" id="main-panels">
@@ -46,8 +51,18 @@
       <div class="panel-splitter" data-splitter="0" title="패널 너비 조절"></div>
 
       <section class="panel panel-col panel-col-center" id="panel-config">
-        <div class="panel-header">
+        <div class="panel-header panel-header-with-search">
           <span>워크스페이스</span>
+          <div class="workspace-search-wrap">
+            <input
+              type="search"
+              id="workspace-search"
+              placeholder="SID, 컨테이너 검색 (2자 이상)…"
+              spellcheck="false"
+              autocomplete="off"
+            />
+            <div id="workspace-search-results" class="search-dropdown hidden"></div>
+          </div>
           <div class="center-mode-tabs" id="center-mode-tabs">
             <button type="button" class="center-mode-tab active" data-mode="structure">구조 맵</button>
             <button type="button" class="center-mode-tab" data-mode="detail">파일 상세</button>
@@ -76,6 +91,27 @@
         </div>
       </aside>
     </main>
+  </div>
+
+  <div id="workspace-browser-modal" class="ws-modal hidden" aria-hidden="true">
+    <div class="ws-modal-backdrop" data-ws-close></div>
+    <div class="ws-modal-panel" role="dialog" aria-labelledby="ws-modal-title">
+      <header class="ws-modal-header">
+        <h2 id="ws-modal-title">워크스페이스 폴더 선택</h2>
+        <button type="button" class="btn btn-ghost ws-modal-close" data-ws-close aria-label="닫기">✕</button>
+      </header>
+      <div class="ws-modal-path">
+        <button type="button" class="btn btn-ghost btn-sm" id="ws-browse-up" title="상위 폴더">↑</button>
+        <input type="text" id="ws-browse-path" readonly spellcheck="false" />
+        <button type="button" class="btn btn-ghost btn-sm" id="ws-browse-native" title="Windows/macOS 폴더 대화상자">시스템 창</button>
+      </div>
+      <ul class="ws-dir-list" id="ws-dir-list"></ul>
+      <footer class="ws-modal-footer">
+        <span class="ws-modal-hint" id="ws-browse-hint"></span>
+        <button type="button" class="btn btn-ghost" data-ws-close>취소</button>
+        <button type="button" class="btn" id="ws-browse-select" disabled>이 폴더 열기</button>
+      </footer>
+    </div>
   </div>
 
   <script type="module" src="/js/main.js"></script>

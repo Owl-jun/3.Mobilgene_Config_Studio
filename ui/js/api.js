@@ -28,6 +28,20 @@ export const Api = {
     });
   },
 
+  browse(path = null) {
+    const q = path
+      ? `?path=${encodeURIComponent(path)}`
+      : "";
+    return this._fetch(`/api/browse${q}`);
+  },
+
+  browsePick(initialPath = null) {
+    return this._fetch("/api/browse_pick", {
+      method: "POST",
+      body: JSON.stringify({ path: initialPath }),
+    });
+  },
+
   workspace() {
     return this._fetch("/api/workspace");
   },
@@ -68,6 +82,29 @@ export const Api = {
 
   refIndex(rebuild = false) {
     return this._fetch(`/api/ref_index?rebuild=${rebuild ? "1" : "0"}`);
+  },
+
+  search(query, limit = 40) {
+    return this._fetch(
+      `/api/search?q=${encodeURIComponent(query)}&limit=${limit}`
+    );
+  },
+
+  resolveTreePath(file, path, name = null) {
+    const params = new URLSearchParams();
+    params.set("file", String(file).replace(/\\/g, "/"));
+    params.set("path", path);
+    if (name) params.set("name", name);
+    return this._fetch(`/api/resolve_tree?${params}`);
+  },
+
+  related(file, path, name = null, limit = 35) {
+    const params = new URLSearchParams();
+    params.set("file", String(file).replace(/\\/g, "/"));
+    params.set("path", path);
+    if (name) params.set("name", name);
+    params.set("limit", String(limit));
+    return this._fetch(`/api/related?${params}`);
   },
 
   graph(file, focus = null, limit = 80) {

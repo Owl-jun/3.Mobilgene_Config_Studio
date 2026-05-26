@@ -1,11 +1,13 @@
 import { Api } from "./api.js";
+import { captureScroll, restoreScroll } from "./scroll-state.js";
 
 /**
  * AUTOSAR layered architecture map (reference-style layer table).
  */
 export class GraphView {
-  constructor(container, { onModuleClick } = {}) {
+  constructor(container, { onModuleClick, scrollEl } = {}) {
     this.container = container;
+    this.scrollEl = scrollEl || container.closest(".panel-body") || container;
     this.onModuleClick = onModuleClick;
     this._data = null;
     this._activePath = "diag";
@@ -13,8 +15,7 @@ export class GraphView {
   }
 
   async render(file) {
-    this.container.innerHTML =
-      '<div class="empty-state"><p>구조 맵 로딩…</p></div>';
+    this._showLoading("구조 맵 분석 중…", "Ecud·Gateway ARXML에서 모듈 연결을 읽는 중입니다.");
     try {
       const data = await Api.moduleGraph(file?.path, null);
       this._data = data;
@@ -43,11 +44,19 @@ export class GraphView {
 
     const sel = data.selected_module;
     const paths = ar.paths || [];
+    if (paths.length && !paths.some((p) => p.id === this._activePath)) {
+      this._activePath = paths[0].id;
+    }
+
+    const pathHint =
+      ar.paths_source === "workspace_scan"
+        ? " · 통신 경로: 워크스페이스 스캔"
+        : "";
 
     let html = `<div class="autosar-map">
       <div class="structure-toolbar">
         <span class="structure-title">AUTOSAR Layered Architecture</span>
-        <span class="structure-meta">${data.module_count} BSW 모듈</span>
+        <span class="structure-meta">${data.module_count} BSW 모듈${pathHint}</span>
       </div>`;
 
     html += `<div class="path-legend">`;
@@ -139,18 +148,55 @@ export class GraphView {
     this.container.innerHTML = html;
 
     this.container.querySelectorAll(".path-pill").forEach((btn) => {
-      btn.addEventListener("click", () => {
+      btn.addEventListener("click", (ev) => {
+        ev.preventDefault();
         this._activePath = btn.dataset.pathId;
-        this._draw(this._data);
+        this._applyPathHighlight();
       });
     });
 
     this.container.querySelector("#btn-show-other")?.addEventListener("click", () => {
+      const scrollState = captureScroll(this.scrollEl, {
+        anchorSelector: ".path-pill-active",
+      });
       this._showOther = true;
       this._draw(this._data);
+      restoreScroll(this.scrollEl, scrollState);
     });
 
     this._bindChips();
+  }
+
+  /** 통신 경로 pill 클릭 — DOM 전체 재생성 없이 하이라이트만 갱신 (스크롤 유지) */
+  _applyPathHighlight() {
+    if (!this._data?.autosar) return;
+    const ar = this._data.autosar;
+    const pathSet = this._activePathModules(ar);
+    const sel = this._data.selected_module;
+
+    this.container.querySelectorAll(".path-pill").forEach((btn) => {
+      btn.classList.toggle("path-pill-active", btn.dataset.pathId === this._activePath);
+    });
+
+    this.container.querySelectorAll(".layer-mod").forEach((btn) => {
+      const mod = btn.dataset.module;
+      btn.classList.remove("layer-mod-selected", "layer-mod-dimmed", "layer-mod-path");
+      if (mod === sel) {
+        btn.classList.add("layer-mod-selected");
+      } else if (pathSet.has(mod)) {
+        btn.classList.add("layer-mod-path");
+      } else if (sel || pathSet.size > 0) {
+        btn.classList.add("layer-mod-dimmed");
+      }
+    });
+  }
+
+  _showLoading(title, detail = "") {
+    this.container.innerHTML = `<div class="view-loading">
+      <div class="view-loading-spinner" aria-hidden="true"></div>
+      <p class="view-loading-title">${esc(title)}</p>
+      ${detail ? `<p class="view-loading-detail">${esc(detail)}</p>` : ""}
+    </div>`;
   }
 
   _activePathModules(ar) {

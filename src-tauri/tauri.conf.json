@@ -7,7 +7,7 @@
     "frontendDist": "../ui",
     "devUrl": "http://127.0.0.1:8765",
     "beforeDevCommand": "powershell -ExecutionPolicy Bypass -File ../run-dev.ps1 -Background",
-    "beforeBuildCommand": ""
+    "beforeBuildCommand": "powershell -ExecutionPolicy Bypass -File ../build-release.ps1 -SkipTauri"
   },
   "app": {
     "windows": [
@@ -24,7 +24,8 @@
   },
   "bundle": {
     "active": true,
-    "targets": "all",
+    "targets": ["nsis"],
+    "externalBin": ["bin/mcs-server"],
     "icon": []
   }
 }

@@ -5,12 +5,15 @@ import { PropertyPanel } from "./property-panel.js";
 import { initPanelSplitters } from "./panel-splitter.js";
 import { navigateToRef } from "./ref-nav.js";
 import { getProfileMeta } from "./profiles/registry.js";
+import { WorkspaceBrowser } from "./workspace-browser.js";
+import { initConfigSearch } from "./config-search.js";
 
 const WORKSPACE_KEY = "mcs_last_workspace";
 
 const els = {
   workspaceInput: document.getElementById("workspace-path"),
   openBtn: document.getElementById("btn-open"),
+  browseBtn: document.getElementById("btn-browse"),
   themeBtn: document.getElementById("btn-theme"),
   fileFilter: document.getElementById("file-filter"),
   fileTree: document.getElementById("file-tree-panel"),
@@ -18,6 +21,8 @@ const els = {
   configContent: document.getElementById("config-content"),
   propertyPanel: document.getElementById("property-panel"),
   centerModeTabs: document.getElementById("center-mode-tabs"),
+  workspaceSearch: document.getElementById("workspace-search"),
+  workspaceSearchResults: document.getElementById("workspace-search-results"),
   status: document.getElementById("status-bar"),
 };
 
@@ -61,23 +66,55 @@ configView.onModuleClick = onModuleClick;
 const propertyPanel = new PropertyPanel(els.propertyPanel, {
   onRefClick: handleRefClick,
 });
+propertyPanel.onModuleOpen = (info) => onModuleClick(info);
+propertyPanel.onIncomingOpen = async ({ file, path, name }) => {
+  if (!workspaceData?.files) return;
+  const f =
+    workspaceData.files.find((x) => x.path === file || x.relative === file) ||
+    workspaceData.files.find((x) => x.relative?.endsWith(file));
+  if (!f) {
+    setStatus(`파일 없음: ${file}`);
+    return;
+  }
+  setCenterMode("detail");
+  fileTree.selectedPath = f.path;
+  fileTree.render({ preserveScroll: true });
+  await configView.loadFile(f);
+  if (path) {
+    await configView.focusPath(path, { name });
+  }
+};
+
+function setWorkspaceLoading(on, message = "워크스페이스 분석 중…") {
+  const el = document.getElementById("workspace-loading");
+  if (!el) return;
+  el.classList.toggle("hidden", !on);
+  const msg = el.querySelector(".workspace-loading-msg");
+  if (msg) msg.textContent = message;
+}
 
 async function openWorkspace(path) {
   if (!path) return;
+  setWorkspaceLoading(true, "ARXML 목록 스캔 중…");
   setStatus("워크스페이스 스캔 중…");
   try {
     workspaceData = await Api.openWorkspace(path);
     localStorage.setItem(WORKSPACE_KEY, path);
     fileTree.setFiles(workspaceData.files);
-    const ri = workspaceData.ref_index;
-    setStatus(
-      `${workspaceData.arxml_count} ARXML · 구조 맵 ${workspaceData.module_graph ?? "?"} 모듈`
-    );
+    setWorkspaceLoading(true, "구조 맵 생성 중… (모듈 연결 분석)");
+    setStatus("구조 맵 로딩…");
     propertyPanel.clear();
     setCenterMode("structure");
     await configView.showStructureGraph();
+    setStatus(
+      `${workspaceData.arxml_count} ARXML · 구조 맵 ${workspaceData.module_graph ?? "?"} 모듈`
+    );
+    // REF 인덱스는 UI 표시 후 백그라운드 갱신 (재오픈 시 서버 캐시 사용)
+    Api.refIndex(false).catch(() => {});
   } catch (e) {
     setStatus(`오류: ${e.message}`);
+  } finally {
+    setWorkspaceLoading(false);
   }
 }
 
@@ -132,18 +169,33 @@ async function onNodeSelect({ path, node }) {
   const file = configView.currentFile;
   if (!file) return;
   propertyPanel.currentFile = file;
+  const nodePath = path || node.path;
+  const nodeName = node.name || node.short_name;
+  let data = null;
+  let related = null;
   try {
-    const data = await Api.properties(file.path, path || node.path);
+    const propsP = Api.properties(file.path, nodePath);
+    const relatedP =
+      node.tag === "ECUC-CONTAINER-VALUE"
+        ? Api.related(file.path, nodePath, nodeName).catch(() => null)
+        : Promise.resolve(null);
+    [data, related] = await Promise.all([propsP, relatedP]);
+  } catch {
+  }
+  if (data) {
     propertyPanel.showProperties(data, {
       editable: file.editable,
       fromFile: file.path,
+      related,
     });
-  } catch {
-    propertyPanel.showProperties({
+    return;
+  }
+  propertyPanel.showProperties(
+    {
       tag: node.tag,
       path: node.path,
       properties: [
-        { key: "SHORT-NAME", value: node.name || "", readonly: false },
+        { key: "SHORT-NAME", value: nodeName || "", readonly: false },
         ...(node.text
           ? [
               {
@@ -156,8 +208,9 @@ async function onNodeSelect({ path, node }) {
             ]
           : []),
       ],
-    }, { fromFile: file.path });
-  }
+    },
+    { fromFile: file.path, related }
+  );
 }
 
 function onRowSelect(payload) {
@@ -190,8 +243,22 @@ function toggleTheme() {
   els.themeBtn.textContent = next === "dark" ? "☀" : "☾";
 }
 
+const workspaceBrowser = new WorkspaceBrowser(
+  document.getElementById("workspace-browser-modal"),
+  {
+    onSelect: (path) => {
+      els.workspaceInput.value = path;
+      openWorkspace(path);
+    },
+  }
+);
+
 els.openBtn.addEventListener("click", () => {
   openWorkspace(els.workspaceInput.value.trim());
+});
+
+els.browseBtn?.addEventListener("click", () => {
+  workspaceBrowser.open(els.workspaceInput.value.trim());
 });
 
 els.workspaceInput.addEventListener("keydown", (e) => {
@@ -220,6 +287,28 @@ document.getElementById("file-tree-collapse-all")?.addEventListener("click", () 
 });
 
 els.themeBtn.addEventListener("click", toggleTheme);
+
+initConfigSearch({
+  inputEl: els.workspaceSearch,
+  resultsEl: els.workspaceSearchResults,
+  setStatus,
+  onPick: async ({ file, path, name }) => {
+    if (!workspaceData?.files) return;
+    const f =
+      workspaceData.files.find((x) => x.path === file || x.relative === file) ||
+      workspaceData.files.find((x) => x.relative?.endsWith(String(file).replace(/\\/g, "/")));
+    if (!f) {
+      setStatus(`파일 없음: ${file}`);
+      return;
+    }
+    setCenterMode("detail");
+    fileTree.selectedPath = f.path;
+    fileTree.render({ preserveScroll: true });
+    propertyPanel.showFileInfo(f);
+    await configView.loadFile(f);
+    await configView.focusPath(path, { name });
+  },
+});
 
 initTheme();
 initPanelSplitters(document.getElementById("main-panels"));

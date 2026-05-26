@@ -17,6 +17,7 @@ export class ConfigViewPanel {
     this.onRefClick = onRefClick;
     this._graphView = new GraphView(this.container, {
       onModuleClick: (info) => this.onModuleClick?.(info),
+      scrollEl: this.scrollEl,
     });
     this.onModuleClick = null;
     this.currentFile = null;
@@ -27,6 +28,10 @@ export class ConfigViewPanel {
     this.treeRoot = null;
     this.selectedNodePath = null;
     this._treeUl = null;
+    /** XML 트리 최초 표시 시 자동 펼침 깊이 (0 = 루트 직계 자식) */
+    this.defaultTreeExpandDepth = 4;
+    /** @type {{ flat: object[], byGateway: Map<string, object[]> } | null} */
+    this._gatewayCache = null;
   }
 
   async loadFile(file) {
@@ -35,9 +40,29 @@ export class ConfigViewPanel {
     this.expandedPaths.clear();
     this.treeRoot = null;
     this.selectedNodePath = null;
+    this._gatewayCache = null;
+    if (this.currentProfile === "gateway") {
+      try {
+        const gw = await Api.gateway(file.path);
+        const flat = [];
+        const byGateway = new Map();
+        for (const g of gw.gateways || []) {
+          byGateway.set(g.name, g.mappings || []);
+          for (const m of g.mappings || []) {
+            flat.push({ ...m, gateway: g.name });
+          }
+        }
+        this._gatewayCache = { flat, byGateway, total: gw.total_mappings || flat.length };
+      } catch {
+        this._gatewayCache = null;
+      }
+    }
     const meta = getProfileMeta(this.currentProfile);
     if (this.centerMode === "detail") {
       if (!meta.views.includes(this.activeView)) {
+        this.activeView = meta.defaultView;
+      }
+      if (this.currentProfile === "gateway") {
         this.activeView = meta.defaultView;
       }
     }
@@ -102,6 +127,31 @@ export class ConfigViewPanel {
     return paths;
   }
 
+  /** 파일 상세 XML 트리 — 상위 N계층까지 기본 펼침 (접기/REF 이동 시에는 유지) */
+  _applyDefaultTreeExpansion(maxDepth = this.defaultTreeExpandDepth) {
+    if (!this.treeRoot || maxDepth <= 0) return;
+
+    const roots = this.treeRoot.children?.length
+      ? this.treeRoot.children
+      : [this.treeRoot].filter(Boolean);
+
+    const visit = (nodes, depth) => {
+      if (!nodes || depth >= maxDepth) return;
+      for (const node of nodes) {
+        if (!node || node.is_meta) continue;
+        const hasKids =
+          node.has_children || (node.children && node.children.length > 0);
+        if (hasKids && node.path) {
+          this.expandedPaths.add(node.path);
+        }
+        if (node.children?.length) {
+          visit(node.children, depth + 1);
+        }
+      }
+    };
+    visit(roots, 0);
+  }
+
   _renderToolbar(meta) {
     if (this.centerMode !== "detail") {
       this.toolbarEl.innerHTML = "";
@@ -115,10 +165,12 @@ export class ConfigViewPanel {
       const active = v === this.activeView ? " active" : "";
       const label =
         v === "matrix"
-          ? "매핑 테이블"
+          ? meta.matrixLabel || "매핑 테이블"
           : v === "containers"
             ? "컨테이너"
-            : "XML 트리";
+            : v === "tree" && meta.treeHint
+              ? "원본 XML"
+              : "XML 트리";
       tabs += `<button type="button" class="view-tab${active}" data-view="${v}">${label}</button>`;
     }
     const treeActions = showTreeActions
@@ -191,7 +243,27 @@ export class ConfigViewPanel {
   }
 
   async _renderGatewayMatrix({ preserveScroll, scrollState } = {}) {
-    const data = await Api.gateway(this.currentFile.path);
+    let data;
+    try {
+      data = await Api.gateway(this.currentFile.path);
+      const flat = [];
+      const byGateway = new Map();
+      for (const g of data.gateways || []) {
+        byGateway.set(g.name, g.mappings || []);
+        for (const m of g.mappings || []) {
+          flat.push({ ...m, gateway: g.name });
+        }
+      }
+      this._gatewayCache = {
+        flat,
+        byGateway,
+        total: data.total_mappings || flat.length,
+      };
+    } catch (e) {
+      this.container.innerHTML = `<div class="empty-state"><p>${esc(e.message)}</p></div>`;
+      return;
+    }
+
     const gateways = data.gateways || [];
     if (!gateways.length) {
       this.container.innerHTML =
@@ -199,32 +271,81 @@ export class ConfigViewPanel {
       return;
     }
 
-    let html = `<div class="stats-grid" style="margin-bottom:0">
-      <div class="stat-card"><div class="label">Gateways</div><div class="value">${gateways.length}</div></div>
-      <div class="stat-card"><div class="label">Mappings</div><div class="value">${data.total_mappings}</div></div>
-    </div>`;
+    const filterId = `gw-filter-${Date.now()}`;
+    let html = `<div class="gateway-matrix-wrap">
+      <div class="stats-grid gateway-stats">
+        <div class="stat-card"><div class="label">Gateway</div><div class="value">${gateways.length}</div></div>
+        <div class="stat-card"><div class="label">매핑</div><div class="value">${data.total_mappings}</div></div>
+      </div>
+      <div class="gateway-toolbar">
+        <input type="search" id="${filterId}" class="gateway-filter" placeholder="버스·PDU 이름 필터 (예: R_CAN1, Monitor)…" spellcheck="false"/>
+        <span class="gateway-filter-count" data-gw-count></span>
+      </div>`;
 
+    const from = this.currentFile.path;
     for (const gw of gateways) {
-      html += `<div class="section-title" style="margin-top:12px">${esc(gw.name)} (${gw.mapping_count})</div>`;
-      html += `<table class="data-table"><thead><tr>
-        <th>Source I-PDU</th><th>Target I-PDU</th></tr></thead><tbody>`;
-      const from = this.currentFile.path;
+      html += `<details class="gateway-group" open>
+        <summary class="gateway-group-title">${esc(gw.name)} <span class="muted">(${gw.mapping_count})</span></summary>
+        <div class="gateway-table-scroll">
+        <table class="data-table gateway-mapping-table"><thead><tr>
+          <th class="col-bus">Source 버스</th>
+          <th class="col-pdu">Source PDU</th>
+          <th class="col-arrow" aria-hidden="true"></th>
+          <th class="col-bus">Target 버스</th>
+          <th class="col-pdu">Target PDU</th>
+        </tr></thead><tbody>`;
       for (const m of gw.mappings) {
-        const src = m.source_ref
-          ? refLinkHtml(m.source_ref, { fromFile: from })
-          : esc(m.source);
-        const tgt = m.target_ref
-          ? refLinkHtml(m.target_ref, { fromFile: from })
-          : esc(m.target);
-        html += `<tr data-mapping='${escAttr(JSON.stringify(m))}'>
-          <td>${src}</td>
-          <td>${tgt}</td></tr>`;
+        const searchText = [
+          m.gateway,
+          m.source_cluster,
+          m.target_cluster,
+          m.source_pdu,
+          m.target_pdu,
+          m.source_ref,
+          m.target_ref,
+        ]
+          .filter(Boolean)
+          .join(" ")
+          .toLowerCase();
+        html += `<tr class="gateway-map-row" data-mapping='${escAttr(JSON.stringify(m))}' data-search="${escAttr(searchText)}">
+          <td><span class="bus-chip">${esc(m.source_cluster || "—")}</span></td>
+          <td class="pdu-cell">${m.source_ref ? refLinkHtml(m.source_ref, { fromFile: from }) : esc(m.source_pdu || m.source)}</td>
+          <td class="col-arrow" aria-label="maps to">→</td>
+          <td><span class="bus-chip bus-chip-target">${esc(m.target_cluster || "—")}</span></td>
+          <td class="pdu-cell">${m.target_ref ? refLinkHtml(m.target_ref, { fromFile: from }) : esc(m.target_pdu || m.target)}</td>
+        </tr>`;
       }
-      html += "</tbody></table>";
+      html += `</tbody></table></div></details>`;
     }
+    html += `</div>`;
+
     this._setContainerHtml(html, { preserveScroll, scrollState });
     this._bindMatrixRows();
     this._bindRefLinks();
+    this._bindGatewayFilter(filterId);
+  }
+
+  _bindGatewayFilter(inputId) {
+    const input = this.container.querySelector(`#${inputId}`);
+    const countEl = this.container.querySelector("[data-gw-count]");
+    if (!input) return;
+    const rows = () =>
+      this.container.querySelectorAll(".gateway-map-row");
+    const update = () => {
+      const q = input.value.trim().toLowerCase();
+      let visible = 0;
+      rows().forEach((tr) => {
+        const hay = tr.dataset.search || "";
+        const show = !q || hay.includes(q);
+        tr.classList.toggle("hidden", !show);
+        if (show) visible += 1;
+      });
+      if (countEl) {
+        countEl.textContent = q ? `${visible} / ${rows().length}건` : "";
+      }
+    };
+    input.addEventListener("input", update);
+    update();
   }
 
   _bindMatrixRows() {
@@ -283,9 +404,16 @@ export class ConfigViewPanel {
 
   async _renderXmlTree({ preserveScroll = false, scrollState = null } = {}) {
     if (!this.treeRoot) {
-      const data = await Api.index(this.currentFile.path, 3);
+      const data = await Api.index(
+        this.currentFile.path,
+        this.defaultTreeExpandDepth
+      );
       this.treeRoot = data.root;
       this._treeStats = data.stats || {};
+    }
+
+    if (this.expandedPaths.size === 0) {
+      this._applyDefaultTreeExpansion();
     }
 
     const stats = this._treeStats || {};
@@ -337,22 +465,40 @@ export class ConfigViewPanel {
     this._bindRefLinks();
   }
 
-  _appendTreeNodes(parentUl, nodes, depth) {
+  _appendTreeNodes(parentUl, nodes, depth, ctx = { mappingIdx: 0 }) {
     if (!nodes) return;
-    for (const node of nodes) {
+    const display = treeDisplayNodes(nodes);
+    for (let i = 0; i < display.length; i++) {
+      const node = display[i];
       if (!node || node.is_meta) continue;
       const li = document.createElement("li");
-      const hasKids =
-        node.has_children || (node.children && node.children.length > 0);
+      const visibleKids = treeDisplayNodes(node.children);
+      const hasKids = visibleKids.length > 0 || node.has_children === true;
       const expanded = this.expandedPaths.has(node.path);
       const indent = depth * 14;
       const isSelected = this.selectedNodePath === node.path;
 
-      const preview = paramPreview(node);
+      let mappingRow = null;
+      if (node.tag === "I-PDU-MAPPING" && this._gatewayCache?.flat) {
+        mappingRow = this._gatewayCache.flat[ctx.mappingIdx];
+        ctx.mappingIdx += 1;
+      }
+      const preview =
+        gatewayMappingPreview(node, mappingRow) || paramPreview(node);
+      const isNamedContainer =
+        node.tag === "ECUC-CONTAINER-VALUE" && node.name;
+      const isMappingLeaf = node.tag === "I-PDU-MAPPING";
       li.innerHTML = `<div class="tree-row${isSelected ? " selected" : ""}" data-path="${escAttr(node.path)}" style="padding-left:${8 + indent}px">
         <button type="button" class="expand-btn" ${hasKids ? "" : "disabled"} aria-label="toggle">${hasKids ? (expanded ? "▼" : "▶") : "·"}</button>
-        <span class="node-tag">${esc(node.tag)}</span>
-        ${node.name ? `<span class="node-name">${esc(node.name)}</span>` : ""}
+        ${
+          isMappingLeaf && preview
+            ? `<span class="node-name node-name-primary mapping-flow">${preview}</span>`
+            : isNamedContainer
+              ? `<span class="node-name node-name-primary">${esc(node.name)}</span>`
+              : `<span class="node-tag">${esc(node.tag)}</span>${
+                  node.name ? `<span class="node-name">${esc(node.name)}</span>` : ""
+                }`
+        }
         ${preview ? `<span class="node-meta">${preview}</span>` : ""}
         ${node.text ? (node.tag?.endsWith("-REF") || node.tag === "DEFINITION-REF"
           ? `<span class="node-meta">${refLinkHtml(node.text, { fromFile: this.currentFile?.path })}</span>`
@@ -383,10 +529,10 @@ export class ConfigViewPanel {
         const childUl = document.createElement("ul");
         childUl.className = "file-tree";
         li.appendChild(childUl);
-        if (node.children?.length) {
-          this._appendTreeNodes(childUl, node.children, depth + 1);
+        if (visibleKids.length) {
+          this._appendTreeNodes(childUl, node.children, depth + 1, ctx);
         } else {
-          this._lazyLoadChildren(childUl, node, depth + 1);
+          this._lazyLoadChildren(childUl, node, depth + 1, ctx);
         }
       }
     }
@@ -411,9 +557,13 @@ export class ConfigViewPanel {
         childUl.className = "file-tree";
         li.appendChild(childUl);
         if (node.children?.length) {
-          this._appendTreeNodes(childUl, node.children, depth + 1);
+          this._appendTreeNodes(childUl, node.children, depth + 1, {
+            mappingIdx: 0,
+          });
         } else {
-          await this._lazyLoadChildren(childUl, node, depth + 1);
+          await this._lazyLoadChildren(childUl, node, depth + 1, {
+            mappingIdx: 0,
+          });
         }
       }
     }
@@ -421,41 +571,75 @@ export class ConfigViewPanel {
     restoreScroll(this.scrollEl, scrollState);
   }
 
-  async _lazyLoadChildren(childUl, node, depth) {
+  async _lazyLoadChildren(childUl, node, depth, ctx = { mappingIdx: 0 }) {
+    const li = childUl.closest("li");
     childUl.innerHTML =
       '<li class="empty-state" style="padding:8px">로딩...</li>';
     const scrollState = captureScroll(this.scrollEl, {
       anchorSelector: ".xml-tree .tree-row.selected",
     });
     try {
-      const sub = await Api.subtree(this.currentFile.path, node.path, 2);
+      const sub = await Api.subtree(this.currentFile.path, node.path, 4);
       childUl.innerHTML = "";
       node.children = sub.node?.children || [];
-      if (node.children.length) {
-        this._appendTreeNodes(childUl, node.children, depth);
+      const visible = treeDisplayNodes(node.children);
+      if (visible.length) {
+        this._appendTreeNodes(childUl, node.children, depth, ctx);
       } else {
+        node.has_children = false;
+        this._setExpandable(li, false);
         childUl.innerHTML =
-          '<li style="padding:8px;color:var(--text-muted)">(empty)</li>';
+          '<li style="padding:8px;color:var(--text-muted)">(하위 없음)</li>';
       }
     } catch {
+      node.has_children = false;
+      this._setExpandable(li, false);
       childUl.innerHTML =
         '<li style="padding:8px;color:var(--danger)">로드 실패</li>';
     }
     restoreScroll(this.scrollEl, scrollState);
   }
 
-  async focusPath(autosarPath) {
+  _setExpandable(li, expandable) {
+    if (!li) return;
+    const btn = li.querySelector(".expand-btn");
+    if (!btn) return;
+    if (expandable) {
+      btn.removeAttribute("disabled");
+      btn.textContent = this.expandedPaths.has(
+        li.querySelector(".tree-row")?.dataset.path
+      )
+        ? "▼"
+        : "▶";
+    } else {
+      btn.setAttribute("disabled", "");
+      btn.textContent = "·";
+    }
+  }
+
+  async focusPath(autosarPath, { name = null } = {}) {
     if (!autosarPath || !this.currentFile) return;
+    let path = autosarPath;
+    if (path.startsWith("/AUTRON/") || path.startsWith("/AUTOSAR/")) {
+      try {
+        const resolved = await Api.resolveTreePath(
+          this.currentFile.path,
+          path,
+          name
+        );
+        if (resolved.tree_path) path = resolved.tree_path;
+      } catch {
+        /* fall back to segment expansion */
+      }
+    }
     this.centerMode = "detail";
-    const parts = autosarPath.split("/").filter(Boolean);
+    const parts = path.split("/").filter(Boolean);
     let acc = "";
     for (const p of parts) {
       acc += `/${p}`;
       this.expandedPaths.add(acc);
     }
-    this.selectedNodePath = autosarPath.startsWith("/")
-      ? autosarPath
-      : `/${autosarPath}`;
+    this.selectedNodePath = path.startsWith("/") ? path : path;
 
     if (this.activeView !== "tree") {
       this.activeView = "tree";
@@ -499,20 +683,126 @@ function esc(s) {
     .replace(/>/g, "&gt;");
 }
 
+/** 트리에 표시할 자식만 (SUB-CONTAINERS 승격, PARAM 숨김) */
+function treeDisplayNodes(nodes) {
+  const out = [];
+  for (const n of nodes || []) {
+    if (!n || n.is_meta) continue;
+    const tag = n.tag || "";
+    if (tag === "I-PDU-MAPPINGS") {
+      out.push(...treeDisplayNodes(n.children));
+      continue;
+    }
+    if (tag === "I-PDU-MAPPING") {
+      out.push({
+        ...n,
+        children: [],
+        has_children: false,
+      });
+      continue;
+    }
+    if (tag === "TARGET-I-PDU" || tag === "SOURCE-I-PDU-REF") {
+      continue;
+    }
+    if (
+      tag === "PARAMETER-VALUES" ||
+      tag === "REFERENCE-VALUES" ||
+      tag === "SUB-CONTAINERS" ||
+      tag === "CONTAINERS"
+    ) {
+      if (tag === "SUB-CONTAINERS" || tag === "CONTAINERS") {
+        out.push(...treeDisplayNodes(n.children));
+      }
+      continue;
+    }
+    if (isEcucParamValueTag(tag)) continue;
+    if (
+      tag === "DEFINITION-REF" ||
+      tag === "VALUE" ||
+      tag === "VALUE-REF" ||
+      tag === "SHORT-NAME" ||
+      tag === "ADMIN-DATA" ||
+      tag === "SDG" ||
+      tag === "SDGS" ||
+      tag === "SD" ||
+      tag === "ANNOTATIONS" ||
+      tag === "ANNOTATION"
+    ) {
+      continue;
+    }
+    out.push(n);
+  }
+  return out;
+}
+
+function isEcucParamValueTag(tag) {
+  return tag?.startsWith("ECUC-") && tag?.endsWith("-PARAM-VALUE");
+}
+
+function gatewayMappingPreview(node, row) {
+  if (node?.tag !== "I-PDU-MAPPING") return "";
+  if (row) {
+    const sBus = row.source_cluster || "?";
+    const tBus = row.target_cluster || "?";
+    const sPdu = esc(row.source_pdu || row.source || "");
+    const tPdu = esc(row.target_pdu || row.target || "");
+    return `<span class="map-bus">${esc(sBus)}</span> <span class="map-pdu">${sPdu}</span>
+      <span class="map-arrow">→</span>
+      <span class="map-bus">${esc(tBus)}</span> <span class="map-pdu">${tPdu}</span>`;
+  }
+  const src =
+    findRefText(node, "SOURCE-I-PDU-REF") ||
+    findRefTextDeep(node, "SOURCE-I-PDU-REF");
+  const tgt =
+    findRefText(node, "TARGET-I-PDU-REF") ||
+    findRefTextDeep(node, "TARGET-I-PDU-REF");
+  if (!src && !tgt) return "";
+  return `${esc(shortPdu(src))} <span class="map-arrow">→</span> ${esc(shortPdu(tgt))}`;
+}
+
+function findRefText(node, tag) {
+  for (const c of node.children || []) {
+    if (c.tag === tag && c.text) return c.text;
+  }
+  return "";
+}
+
+function findRefTextDeep(node, tag) {
+  if (node.tag === tag && node.text) return node.text;
+  for (const c of node.children || []) {
+    const hit = findRefTextDeep(c, tag);
+    if (hit) return hit;
+  }
+  return "";
+}
+
+function shortPdu(ref) {
+  if (!ref) return "";
+  const parts = ref.split("/").filter(Boolean);
+  const pdu = parts[parts.length - 1] || ref;
+  const cluster =
+    parts.includes("CLUSTERS") && parts.indexOf("CLUSTERS") + 1 < parts.length
+      ? parts[parts.indexOf("CLUSTERS") + 1]
+      : "";
+  return cluster ? `${cluster} · ${pdu}` : pdu;
+}
+
 function paramPreview(node) {
   const tag = node?.tag || "";
+  if (tag === "ECUC-CONTAINER-VALUE" && node.name) {
+    return "클릭 → 파라미터 표";
+  }
   if (tag === "PARAMETER-VALUES" || tag === "REFERENCE-VALUES") {
-    const n = node.children?.length || 0;
-    return n > 0 ? `${n} params` : "";
+    return "";
   }
   if (!tag.startsWith("ECUC-") || !tag.endsWith("-PARAM-VALUE")) return "";
-  const def = node.children?.find((c) => c.tag === "DEFINITION-REF" && c.text)?.text;
   const val =
     node.children?.find((c) => c.tag === "VALUE" && c.text)?.text ||
     node.children?.find((c) => c.tag === "VALUE-REF" && c.text)?.text;
-  if (!def && !val) return "";
-  const name = def ? def.split("/").pop() : "param";
-  return `${esc(name)} = ${esc(val || "")}`;
+  const def = node.children?.find((c) => c.tag === "DEFINITION-REF" && c.text)?.text;
+  const name = node.name || (def ? def.split("/").pop() : "");
+  if (!name && !val) return "";
+  return `${esc(name || "param")} = ${esc(val || "")}`;
 }
 
 function escAttr(s) {

@@ -50,14 +50,37 @@ cd c:\MyJob\3.Mobilgene_Config_Studio
 | Endpoint | 설명 |
 |----------|------|
 | `POST /api/open_workspace` | 워크스페이스 열기 |
+| `GET /api/browse?path=` | 폴더 탐색 (찾아보기 UI) |
+| `POST /api/browse_pick` | OS 폴더 대화상자 (서버 PC) |
 | `GET /api/workspace` | ARXML 목록 |
 | `GET /api/index?file=` | 얕은 XML 인덱스 |
 | `GET /api/gateway?file=` | Gateway 매핑 |
 | `GET /api/ecuc?file=` | ECUC 컨테이너 요약 |
 | `GET /api/properties?file=&path=` | 노드 속성 |
 
+## 1차 배포 (오프라인 PC, Python/Node 불필요)
+
+**빌드 (개발 PC 1회):**
+
+```powershell
+cd c:\MyJob\3.Mobilgene_Config_Studio
+.\build-release.ps1 -SkipTauri -Zip
+```
+
+**결과물:** `dist\MobilgeneConfigStudio\` 폴더 (또는 ZIP)
+
+| 파일 | 설명 |
+|------|------|
+| `Start.bat` | 더블클릭 실행 (권장) |
+| `MobilgeneConfigStudio.exe` | 내장 Python + API 서버 + UI |
+| `README.txt` | 사용 안내 |
+
+대상 PC 요구: **Windows 10/11 x64**, Edge 또는 Chrome (앱 창용, 일반적으로 기본 설치됨).
+
+**Tauri 설치형 (선택):** Rust + `cargo tauri` 설치 후 `.\build-release.ps1` ( `-SkipTauri` 없이) → NSIS 설치 프로그램.
+
 ## 로드맵
 
 - **P0** (현재): 파일 트리 + ARXML 읽기 전용 뷰
-- **P1**: Gateway 매핑 CRUD + 저장
-- **P2+**: Ecuc 편집, REF 점프, Tauri 단일 exe
+- **배포 v0.1**: PyInstaller portable (+ 선택 Tauri)
+- **P1+**: Ecuc 편집, REF 점프, Rust 코어 이전

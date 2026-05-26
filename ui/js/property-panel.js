@@ -33,32 +33,34 @@ export class PropertyPanel {
       <p class="viewer-hint">Mobilgene 보조 뷰어 — REF 클릭으로 정의 위치로 이동, 관계 그래프 탭에서 의존성 확인</p>`;
   }
 
-  showProperties(data, { editable = false, fromFile } = {}) {
-    if (!data || !data.properties?.length) {
+  showProperties(data, { editable = false, fromFile, related = null } = {}) {
+    const hasProps = data?.properties?.length;
+    const hasRefTable = data?.properties?.some((p) => p.key === "_ref_table");
+    const incomingOnly =
+      related?.incoming?.length > 0 ? related.incoming : [];
+    const hasIncoming = incomingOnly.length > 0;
+    if (!hasProps && !hasIncoming) {
       this.container.innerHTML =
         '<div class="empty-state"><p>표시할 속성이 없습니다.</p></div>';
       return;
     }
 
     const src = fromFile || this.currentFile?.path;
-    let html = `<div class="section-title">${esc(data.tag || "Node")}</div><div class="prop-list">`;
-    for (const p of data.properties) {
+    const title =
+      data?.node?.name ||
+      data?.properties?.find((p) => p.key === "SHORT-NAME")?.value ||
+      data?.tag ||
+      related?.name ||
+      "Node";
+    let html = `<div class="section-title">${esc(title)}</div>`;
+    html += `<div class="prop-list">`;
+    for (const p of data?.properties || []) {
       if (p.key === "_param_table" && Array.isArray(p.param_rows)) {
-        let rows = "";
-        for (const r of p.param_rows) {
-          const k = esc(r.name || "");
-          let v = esc(r.value || "");
-          if (r.value_is_ref && r.value?.startsWith("/")) {
-            v = refLinkHtml(r.value, { fromFile: src });
-          }
-          rows += `<tr><td>${k}</td><td>${v}</td></tr>`;
-        }
-        html += `</div>
-          <table class="data-table">
-            <thead><tr><th>Parameter</th><th>Value</th></tr></thead>
-            <tbody>${rows}</tbody>
-          </table>
-          <div class="prop-list">`;
+        html += `</div>${renderKeyValueTable("Parameter", "Value", p.param_rows, src)}<div class="prop-list">`;
+        continue;
+      }
+      if (p.key === "_ref_table" && Array.isArray(p.ref_rows)) {
+        html += `</div>${renderKeyValueTable("이 컨테이너 → 연결", "대상", p.ref_rows, src)}<div class="prop-list">`;
         continue;
       }
       const ro = p.readonly || !editable;
@@ -73,11 +75,39 @@ export class PropertyPanel {
       html += `<div class="prop-row"><span class="prop-key">${esc(p.key)}</span>${valHtml}</div>`;
     }
     html += "</div>";
-    if (data.path) {
+    if (data?.path) {
       html += `<div class="section-title">경로</div><div class="prop-list"><div class="prop-row"><span class="prop-key">논리 경로</span><span class="prop-value" style="font-size:11px">${esc(data.path)}</span></div></div>`;
+    }
+    if (hasIncoming) {
+      html += renderIncomingSection(incomingOnly, src, {
+        autosarPath: related?.autosar_path,
+      });
+    } else if (
+      related &&
+      !hasRefTable &&
+      related.outgoing_count === 0 &&
+      data?.node?.tag === "ECUC-CONTAINER-VALUE"
+    ) {
+      html += `<p class="viewer-hint">이 컨테이너에는 직접 REF가 없습니다. 연결은 하위 컨테이너(예: defaultSession)를 선택하세요.</p>`;
     }
     this.container.innerHTML = html;
     this._bindRefLinks();
+    this._bindIncomingHits();
+  }
+
+  _bindIncomingHits() {
+    this.container.querySelectorAll(".incoming-hit[data-file]").forEach((row) => {
+      row.style.cursor = "pointer";
+      row.addEventListener("click", (e) => {
+        if (e.target.closest(".ref-link")) return;
+        e.preventDefault();
+        this.onIncomingOpen?.({
+          file: row.dataset.file,
+          path: row.dataset.path,
+          name: row.dataset.name,
+        });
+      });
+    });
   }
 
   showMappingRow(row, { editable = false, fromFile } = {}) {
@@ -124,6 +154,48 @@ export class PropertyPanel {
       });
     });
   }
+}
+
+function renderIncomingSection(rows, fromFile, { autosarPath } = {}) {
+  const pathHint = autosarPath
+    ? `<p class="viewer-hint muted">대상 경로: ${esc(autosarPath)}</p>`
+    : "";
+  let body = "";
+  for (const r of rows) {
+    const fromLabel = esc(r.from_name || r.from_path?.split("/").pop() || "?");
+    const fromFileLabel = esc((r.file || "").split("/").pop() || r.file || "");
+    body += `<tr class="incoming-hit" data-file="${escAttr(
+      r.file || ""
+    )}" data-path="${escAttr(r.from_path || "")}" data-name="${escAttr(
+      r.from_name || ""
+    )}">
+      <td><span class="incoming-from">${fromLabel}</span><br/><span class="muted">${fromFileLabel}</span></td>
+      <td>${esc(r.ref_tag || "REF")}</td>
+    </tr>`;
+  }
+  return `${pathHint}
+    <div class="section-title section-sub">← 이 컨테이너를 참조 (${rows.length})</div>
+    <table class="data-table data-table-compact">
+      <thead><tr><th>출처 컨테이너</th><th>REF 종류</th></tr></thead>
+      <tbody>${body}</tbody>
+    </table>
+    <p class="viewer-hint">행 클릭 시 참조한 쪽으로 이동</p>`;
+}
+
+function renderKeyValueTable(colA, colB, rows, fromFile) {
+  let body = "";
+  for (const r of rows) {
+    const k = esc(r.name || "");
+    let v = esc(r.value || "");
+    if (r.value_is_ref && r.value?.startsWith("/")) {
+      v = refLinkHtml(r.value, { fromFile });
+    }
+    body += `<tr><td>${k}</td><td>${v}</td></tr>`;
+  }
+  return `<table class="data-table">
+    <thead><tr><th>${esc(colA)}</th><th>${esc(colB)}</th></tr></thead>
+    <tbody>${body}</tbody>
+  </table>`;
 }
 
 function esc(s) {

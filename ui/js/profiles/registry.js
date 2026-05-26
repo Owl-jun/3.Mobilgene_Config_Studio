@@ -8,6 +8,8 @@ const PROFILE_META = {
     label: "Gateway",
     views: ["matrix", "tree"],
     defaultView: "matrix",
+    matrixLabel: "매핑 테이블",
+    treeHint: "원본 XML — 가독성은 매핑 테이블 탭 권장",
   },
   ecuc: {
     label: "ECUC",

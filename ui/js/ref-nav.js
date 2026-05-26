@@ -29,7 +29,9 @@ export async function navigateToRef(ref, { fromFile, workspaceFiles, fileTree, c
 
     await configView.loadFile(file);
     if (resolved.autosar_path) {
-      await configView.focusPath(resolved.autosar_path);
+      await configView.focusPath(resolved.autosar_path, {
+        name: resolved.name,
+      });
     }
 
     setStatus?.(`↗ ${resolved.relative} · ${resolved.match}`);

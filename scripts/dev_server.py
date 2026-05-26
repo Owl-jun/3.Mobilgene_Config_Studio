@@ -16,12 +16,15 @@ from pathlib import Path
 
 # Allow import from same directory
 sys.path.insert(0, str(Path(__file__).parent))
+import app_paths  # noqa: E402
 import arxml_parser as ap  # noqa: E402
 import ref_index as ri  # noqa: E402
+import related_context as rc  # noqa: E402
 import module_graph as mg  # noqa: E402
+import workspace_browser as wb  # noqa: E402
 
-ROOT = Path(__file__).resolve().parent.parent
-UI_DIR = ROOT / "ui"
+ROOT = app_paths.get_resource_root()
+UI_DIR = app_paths.get_ui_dir()
 DEFAULT_PORT = 8765
 
 _workspace: Path | None = None
@@ -114,7 +117,15 @@ class Handler(BaseHTTPRequestHandler):
                     "ok": True,
                     "workspace": str(_workspace) if _workspace else None,
                     "api_version": 2,
-                    "features": ["module_graph", "resolve_ref", "ref_index"],
+                    "features": [
+                        "module_graph",
+                        "resolve_ref",
+                        "ref_index",
+                        "browse",
+                        "search",
+                        "related",
+                        "resolve_tree",
+                    ],
                 }
             )
             return
@@ -200,8 +211,72 @@ class Handler(BaseHTTPRequestHandler):
             )
             return
 
+        if path == "/api/search":
+            if not _workspace:
+                self._send_json({"error": "no_workspace"}, 400)
+                return
+            q = qs.get("q", [""])[0]
+            limit = int(qs.get("limit", ["40"])[0])
+            rebuild = qs.get("rebuild", ["0"])[0] == "1"
+            if rebuild:
+                ri.get_index(_workspace, rebuild=True)
+            self._send_json(rc.search_workspace(_workspace, q, limit=limit))
+            return
+
+        if path == "/api/resolve_tree":
+            if not _workspace:
+                self._send_json({"error": "no_workspace"}, 400)
+                return
+            file_p = qs.get("file", [""])[0]
+            node_path = qs.get("path", [""])[0]
+            node_name = qs.get("name", [None])[0]
+            fp = self._resolve_file(file_p) if file_p else None
+            if not fp:
+                self._send_json({"error": "invalid_file"}, 403)
+                return
+            tree_path = rc.resolve_tree_path(fp, node_path, node_name=node_name)
+            self._send_json(
+                {
+                    "file": file_p,
+                    "path": node_path,
+                    "name": node_name,
+                    "tree_path": tree_path,
+                    "resolved": tree_path is not None,
+                }
+            )
+            return
+
+        if path == "/api/related":
+            if not _workspace:
+                self._send_json({"error": "no_workspace"}, 400)
+                return
+            file_p = qs.get("file", [""])[0]
+            node_path = qs.get("path", [""])[0]
+            node_name = qs.get("name", [None])[0]
+            limit = int(qs.get("limit", ["35"])[0])
+            rebuild = qs.get("rebuild", ["0"])[0] == "1"
+            if rebuild:
+                ri.get_index(_workspace, rebuild=True)
+            self._send_json(
+                rc.find_related(
+                    _workspace,
+                    file_p,
+                    node_path,
+                    node_name=node_name,
+                    limit=limit,
+                )
+            )
+            return
+
         if path in ("/api/graph", "/api/module_graph"):
             self._api_module_graph(qs)
+            return
+
+        if path == "/api/browse":
+            path_arg = qs.get("path", [None])[0]
+            if path_arg:
+                path_arg = urllib.parse.unquote(path_arg)
+            self._send_json(wb.list_directory(path_arg))
             return
 
         self._send_json({"error": "not_found"}, 404)
@@ -247,11 +322,24 @@ class Handler(BaseHTTPRequestHandler):
             _workspace = p
             data = ap.scan_workspace(p)
             data["opened"] = True
-            ref_stats = ri.get_index(p, rebuild=True).stats()
+            # REF 인덱스: 동일 워크스페이스 재오픈 시 캐시 재사용 (첫 오픈만 전체 스캔)
+            ref_stats = ri.get_index(p, rebuild=False).stats()
             data["ref_index"] = ref_stats
-            mg._graph_cache.clear()
-            data["module_graph"] = mg.build_module_graph(p).get("module_count")
+            mg._graph_cache.pop(str(p.resolve()), None)
+            mg._file_text_cache.clear()
+            data["module_graph"] = len(mg.discover_modules(p))
             self._send_json(data)
+            return
+
+        if path == "/api/browse_pick":
+            initial = body.get("path") or (
+                str(_workspace) if _workspace else None
+            )
+            chosen = wb.pick_folder_native(initial)
+            if not chosen:
+                self._send_json({"cancelled": True})
+                return
+            self._send_json({"path": chosen})
             return
 
         self._send_json({"error": "not_found"}, 404)
