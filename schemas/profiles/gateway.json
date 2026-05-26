@@ -1,0 +1,12 @@
+{
+  "id": "gateway",
+  "label": "Gateway",
+  "description": "I-PDU source to target mappings",
+  "detect": ["GATEWAY", "I-PDU-MAPPING"],
+  "view": "matrix",
+  "editable": true,
+  "columns": [
+    { "id": "source", "label": "Source I-PDU", "type": "ref" },
+    { "id": "target", "label": "Target I-PDU", "type": "ref" }
+  ]
+}

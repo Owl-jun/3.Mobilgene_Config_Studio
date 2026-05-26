@@ -1,0 +1,9 @@
+/target/
+/src-tauri/target/
+node_modules/
+*.bak
+__pycache__/
+*.pyc
+.DS_Store
+
+cursor_direction.md

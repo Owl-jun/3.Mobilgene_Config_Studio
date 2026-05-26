@@ -1,0 +1,9 @@
+{
+  "id": "generic",
+  "label": "Generic ARXML",
+  "description": "XML tree fallback view",
+  "detect": [],
+  "view": "tree",
+  "editable": false,
+  "hidden_tags": ["ADMIN-DATA"]
+}

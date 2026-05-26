@@ -1,0 +1,30 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Mobilgene Config Studio",
+  "version": "0.1.0",
+  "identifier": "com.mobilgene.configstudio",
+  "build": {
+    "frontendDist": "../ui",
+    "devUrl": "http://127.0.0.1:8765",
+    "beforeDevCommand": "powershell -ExecutionPolicy Bypass -File ../run-dev.ps1 -Background",
+    "beforeBuildCommand": ""
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "Mobilgene Config Studio",
+        "width": 1400,
+        "height": 900,
+        "resizable": true
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": []
+  }
+}

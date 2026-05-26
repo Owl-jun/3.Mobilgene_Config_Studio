@@ -1,0 +1,9 @@
+{
+  "id": "ecuc",
+  "label": "ECUC Module",
+  "description": "BSW module configuration containers and parameters",
+  "detect": ["ECUC-MODULE-CONFIGURATION-VALUES"],
+  "view": "container_table",
+  "editable": true,
+  "hidden_tags": ["ADMIN-DATA", "SDG", "SDGS", "SD"]
+}

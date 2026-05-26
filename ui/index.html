@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="ko" data-theme="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Mobilgene Config Studio</title>
+  <link rel="stylesheet" href="/css/app.css" />
+</head>
+<body>
+  <div id="app">
+    <header class="app-header">
+      <div class="brand">
+        <h1>Mobilgene Config Studio</h1>
+        <span class="brand-tagline">AUTOSAR Config Viewer</span>
+      </div>
+      <form class="workspace-form" onsubmit="return false">
+        <input
+          type="text"
+          id="workspace-path"
+          placeholder="Mobilgene 워크스페이스 루트 경로 (예: .../rgw_working)"
+          spellcheck="false"
+        />
+        <button type="button" class="btn" id="btn-open">워크스페이스 열기</button>
+      </form>
+      <div class="header-actions">
+        <button type="button" class="btn btn-ghost" id="btn-theme" title="테마 전환">☀</button>
+      </div>
+      <span class="status-bar" id="status-bar">준비</span>
+    </header>
+
+    <main class="main-panels" id="main-panels">
+      <aside class="panel panel-col" id="panel-files">
+        <div class="panel-header">
+          <span>파일 트리</span>
+          <div class="tree-actions">
+            <button type="button" class="btn-tree-action" id="file-tree-expand-all" title="전체 펼치기">펼치기</button>
+            <button type="button" class="btn-tree-action" id="file-tree-collapse-all" title="전체 접기">접기</button>
+          </div>
+        </div>
+        <div class="filter-bar">
+          <input type="search" id="file-filter" placeholder="ARXML 필터..." />
+        </div>
+        <div class="panel-body" id="file-tree-panel"></div>
+      </aside>
+
+      <div class="panel-splitter" data-splitter="0" title="패널 너비 조절"></div>
+
+      <section class="panel panel-col panel-col-center" id="panel-config">
+        <div class="panel-header">
+          <span>워크스페이스</span>
+          <div class="center-mode-tabs" id="center-mode-tabs">
+            <button type="button" class="center-mode-tab active" data-mode="structure">구조 맵</button>
+            <button type="button" class="center-mode-tab" data-mode="detail">파일 상세</button>
+          </div>
+        </div>
+        <div class="config-toolbar" id="config-toolbar"></div>
+        <div class="config-content panel-body" id="config-content">
+          <div class="empty-state">
+            <h3>구조 맵</h3>
+            <p>워크스페이스를 연면 BSW 모듈 결합 구조가 표시됩니다.</p>
+          </div>
+        </div>
+      </section>
+
+      <div class="panel-splitter" data-splitter="1" title="패널 너비 조절"></div>
+
+      <aside class="panel panel-col" id="panel-properties">
+        <div class="panel-header">
+          <span>속성</span>
+        </div>
+        <div class="panel-body" id="property-panel">
+          <div class="empty-state">
+            <h3>속성</h3>
+            <p>항목을 선택하면 세부 정보가 표시됩니다.</p>
+          </div>
+        </div>
+      </aside>
+    </main>
+  </div>
+
+  <script type="module" src="/js/main.js"></script>
+</body>
+</html>
