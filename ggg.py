@@ -1,56 +1,59 @@
+#region INCLUDES
 from lxml import etree
 import os
-
 import json
-
 import streamlit as st
-
-class ARXML_Short_Name_Path():
-  def __init__( self, short_name, elmt ):
-    self.short_name = short_name
-    self.elmt = elmt
-    self.children = []
-    self.parent = None
-
-  def __iadd__( self, child ):
-    if isinstance( child, ARXML_Short_Name_Path ):
-      self.children.append( child )
-      child.parent = self
-      return self
-    return NotImplemented
-#region
-  # def repr_with_children( self, indent = '' ):
-  #   str_repr = indent + '- ' + self.short_name
-  #   if self.children:
-  #     str_repr += '\n' + '\n'.join( child.repr_with_children( indent + '  ' ) for child in self.children )
-  #   return str_repr
-
-  # def __repr__( self ):
-  #   return self.repr_with_children()
 #endregion
 
-  def absolute_path( self ):
-    if self.parent != None:
-      return self.parent.absolute_path() + '/' + self.short_name
-    else:
-      return '/' + self.short_name
+#region ARXML_Short_Name_Path()
+# class ARXML_Short_Name_Path():
+#   def __init__( self, short_name, elmt ):
+#     self.short_name = short_name
+#     self.elmt = elmt
+#     self.children = []
+#     self.parent = None
 
-  def find( self, str_short_name_path ):
-    list_short_name = str_short_name_path.split( '/', 1 )
-    if not list_short_name[0]:
-      list_short_name = list_short_name[1].split( '/', 1 )
+#   def __iadd__( self, child ):
+#     if isinstance( child, ARXML_Short_Name_Path ):
+#       self.children.append( child )
+#       child.parent = self
+#       return self
+#     return NotImplemented
+# #region
+#   # def repr_with_children( self, indent = '' ):
+#   #   str_repr = indent + '- ' + self.short_name
+#   #   if self.children:
+#   #     str_repr += '\n' + '\n'.join( child.repr_with_children( indent + '  ' ) for child in self.children )
+#   #   return str_repr
 
-    if self.short_name == list_short_name[0]:
-      list_short_name.pop( 0 )
-      if list_short_name:
-        for child in self.children:
-          short_name_path = child.find( list_short_name[0] )
-          if short_name_path:
-            return child.find( list_short_name[0] )
-      else:
-        return self
-    return None
+#   # def __repr__( self ):
+#   #   return self.repr_with_children()
+# #endregion
 
+#   def absolute_path( self ):
+#     if self.parent != None:
+#       return self.parent.absolute_path() + '/' + self.short_name
+#     else:
+#       return '/' + self.short_name
+
+#   def find( self, str_short_name_path ):
+#     list_short_name = str_short_name_path.split( '/', 1 )
+#     if not list_short_name[0]:
+#       list_short_name = list_short_name[1].split( '/', 1 )
+
+#     if self.short_name == list_short_name[0]:
+#       list_short_name.pop( 0 )
+#       if list_short_name:
+#         for child in self.children:
+#           short_name_path = child.find( list_short_name[0] )
+#           if short_name_path:
+#             return child.find( list_short_name[0] )
+#       else:
+#         return self
+#     return None
+#endregion
+
+#region ARXML_ELMT()
 class ARXML_ELMT():
   LIST_DEF_SPEC: list = [
   ]
@@ -88,7 +91,7 @@ class ARXML_ELMT():
           info_sub['val'] = def_spec['dict']['type']()
           if def_spec['type'] is not None:
             info_sub['ref'] = globals()[def_spec['type']]( elmt_sub, self.ns, info_sub['val'] )
-#region 주석 폴딩 처리
+#region UNUSE_FUNCTION_IN_ARXML_ELMT
   # def init_info( self ):
   #   for def_spec in self.LIST_DEF_SPEC:
   #     if def_spec['dict']['key'] is not None:
@@ -120,7 +123,9 @@ class ARXML_ELMT():
   #           else:
   #             self.info[def_spec['dict']['key']] = def_spec['dict']['type']( elmt.text )
 #endregion
+#endregion
 
+#region ARXML_ELMT DEFINITIONS
 class ARXML_ELMT_CNTR( ARXML_ELMT ):
   LIST_DEF_SPEC: list = [
     { 'tag': 'SHORT-NAME',                        'type': None,               'dict': { 'key': 'name',  'type': str   } },
@@ -160,11 +165,9 @@ class ARXML_ELMT_ROOT( ARXML_ELMT ):
   LIST_DEF_SPEC: list = [
     { 'tag': 'AR-PACKAGES',                       'type': 'ARXML_ELMT_PKGS',  'dict': { 'key': 'pkgs',  'type': list  } },
   ]
+#endregion
 
-
-
-
-# OPEN ARXML FILE
+#region ARXML_DOC()
 class ARXML_DOC():
   def __init__( self, path ):
     self.doc = etree.parse( path )  # get file and convert to tree
@@ -175,45 +178,55 @@ class ARXML_DOC():
     self.root = ARXML_ELMT_ROOT( self.elmt_root, self.ns, self.info )
     # print( json.dumps( self.info, indent = 2 ) )
     print( self.info )
+#endregion
+
+def get_arxml_elmt_short_name( arxml_elmt ):
+  if not isinstance( arxml_elmt.info, dict ):
+    return None
+
+  info_short_name = arxml_elmt.info.get( 'SHORT-NAME' )
+  if not isinstance( info_short_name, dict ):
+    return None
+
+  return info_short_name['val']
 
 
-
-
-def st_display_arxml_elmt_tree( arxml_elmt ):
+def iter_arxml_elmt_children( arxml_elmt ):
   if isinstance( arxml_elmt.info, dict ):
-    for key, value in arxml_elmt.info.items():
-      if value is not None:
-        if key == 'SHORT-NAME':
-          with st.expander( value['val'], type = 'compact' ):
-            st.write( '111111111')
-
-        if isinstance( value, dict ):
-          if value['ref'] is not None:
-            st_display_arxml_elmt_tree( value['ref'] )
-          elif value['val'] is not None:
-            print( key )
-            print( value['val'] )
-            print( '2' )
-      else:
-        print('hhhhhhhhh')
-        print(key)
-      # elif key == 'val' and value is not None:
-      #   print( '1' )
-        # print( value['val'] )
-        # print( '2' )
-        # if 'SHORT-NAME' in dict_info['val']:
-        #   print('11111111')
+    for value in arxml_elmt.info.values():
+      if isinstance( value, dict ) and value['ref'] is not None:
+        yield value['ref']
   elif isinstance( arxml_elmt.info, list ):
     for dict_info in arxml_elmt.info:
       if dict_info['ref'] is not None:
-        st_display_arxml_elmt_tree( dict_info['ref'] )
+        yield dict_info['ref']
 
-      # if dict_info['val'] is not None:
 
-      # if key == 'val':
-      #   with st.expander( arxml_elmt.info['SHORT-NAME'], type = 'compact' ):
-      #     st.write( '111111111')
-      # else isinstance( value, dict )
+def is_arxml_module_configuration( arxml_elmt ):
+  return etree.QName( arxml_elmt.elmt ).localname == 'ECUC-MODULE-CONFIGURATION-VALUES'
+
+
+def st_display_arxml_elmt_children( arxml_elmt, current_path, display_module_tree ):
+  for child in iter_arxml_elmt_children( arxml_elmt ):
+    st_display_arxml_elmt_tree( child, current_path, display_module_tree )
+
+
+def st_display_arxml_elmt_tree( arxml_elmt, parent_path = '', display_module_tree = False ):
+  short_name = get_arxml_elmt_short_name( arxml_elmt )
+
+  if short_name is None:
+    st_display_arxml_elmt_children( arxml_elmt, parent_path, display_module_tree )
+    return
+
+  current_path = parent_path + '/' + short_name
+  display_module_tree = display_module_tree or is_arxml_module_configuration( arxml_elmt )
+
+  if display_module_tree:
+    with st.expander( short_name, type = 'compact', key = current_path ):
+      st_display_arxml_elmt_children( arxml_elmt, current_path, display_module_tree )
+  else:
+    st_display_arxml_elmt_children( arxml_elmt, current_path, display_module_tree )
+
 
 
 
@@ -225,8 +238,8 @@ if 'arxml_doc_cfg_spec' not in st.session_state:
   st.session_state.arxml_doc_cfg_spec = ARXML_DOC( path_arxml_cfg_spec )
 if 'arxml_doc_cfg' not in st.session_state:
   path_arxml_cfg = 'Ecud_Dcm.arxml'
-  # st.session_state.arxml_doc_cfg = ARXML_DOC( path_arxml_cfg )
-if 'tree_selectd_path' not in st.session_state:
+  st.session_state.arxml_doc_cfg = ARXML_DOC( path_arxml_cfg )
+if 'selectd' not in st.session_state:
   st.session_state.selectd = None
 
 st.markdown(
@@ -268,7 +281,7 @@ st.set_page_config( page_title = 'ARXML(AUTOSAR XML) Editor', layout = 'wide' )
 
 with view_left:
   with st.container( border = True, height = 800 ):
-    st_display_arxml_elmt_tree( st.session_state.arxml_doc_cfg_spec.root )
+    st_display_arxml_elmt_tree( st.session_state.arxml_doc_cfg.root )
 
 with view_right:
   with st.container( border = True, height = 800 ):
