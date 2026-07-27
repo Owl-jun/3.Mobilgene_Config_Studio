@@ -18,7 +18,7 @@ class ARXML_Short_Name_Path():
       child.parent = self
       return self
     return NotImplemented
-
+#region
   # def repr_with_children( self, indent = '' ):
   #   str_repr = indent + '- ' + self.short_name
   #   if self.children:
@@ -27,6 +27,7 @@ class ARXML_Short_Name_Path():
 
   # def __repr__( self ):
   #   return self.repr_with_children()
+#endregion
 
   def absolute_path( self ):
     if self.parent != None:
@@ -69,8 +70,8 @@ class ARXML_ELMT():
   def to_info( self ):
     if isinstance( self.info, dict ):
       for def_spec in self.LIST_DEF_SPEC:
-        self.info[def_spec['tag']] = { 'ref': None, 'val': None }
-        elmt_sub = self.elmt.find( def_spec['tag'], self.ns )
+        self.info[def_spec['tag']] = { 'ref': None, 'val': None } 
+        elmt_sub = self.elmt.find( def_spec['tag'], self.ns ) 
         if elmt_sub is not None:
           if def_spec['dict']['type'] in [list, dict]:
             self.info[def_spec['tag']]['val'] = def_spec['dict']['type']()
@@ -87,7 +88,7 @@ class ARXML_ELMT():
           info_sub['val'] = def_spec['dict']['type']()
           if def_spec['type'] is not None:
             info_sub['ref'] = globals()[def_spec['type']]( elmt_sub, self.ns, info_sub['val'] )
-
+#region 주석 폴딩 처리
   # def init_info( self ):
   #   for def_spec in self.LIST_DEF_SPEC:
   #     if def_spec['dict']['key'] is not None:
@@ -118,11 +119,7 @@ class ARXML_ELMT():
   #             # def_spec['type']( self.info )
   #           else:
   #             self.info[def_spec['dict']['key']] = def_spec['dict']['type']( elmt.text )
-
-
-
-
-
+#endregion
 
 class ARXML_ELMT_CNTR( ARXML_ELMT ):
   LIST_DEF_SPEC: list = [
@@ -167,11 +164,12 @@ class ARXML_ELMT_ROOT( ARXML_ELMT ):
 
 
 
+# OPEN ARXML FILE
 class ARXML_DOC():
   def __init__( self, path ):
-    self.doc = etree.parse( path )
-    self.elmt_root = self.doc.getroot()
-    self.ns = self.elmt_root.nsmap
+    self.doc = etree.parse( path )  # get file and convert to tree
+    self.elmt_root = self.doc.getroot() # get root xml tag -> output e. g. {http://autosar.org/schema/r4.0}AUTOSAR
+    self.ns = self.elmt_root.nsmap  # save {namespace(ns)} info
     self.info = dict()
 
     self.root = ARXML_ELMT_ROOT( self.elmt_root, self.ns, self.info )
