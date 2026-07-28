@@ -2,10 +2,12 @@
 from lxml import etree
 import os
 import json
+import copy
 import streamlit as st
 #endregion
 
 #region FOR_DEBUG_TREE
+# Recursively prints the parsed info structure in a readable tree format.
 def print_info( info, indent = '', visited = None, file = None ):
   if visited is None:
     visited = set()
@@ -43,6 +45,7 @@ def print_info( info, indent = '', visited = None, file = None ):
     print( '{}{!r}'.format( indent, info ), file = file )
 
 
+# Writes one or more parsed info trees to a UTF-8 text log file.
 def save_info_log( path_log, list_info ):
   with open( path_log, 'w', encoding = 'utf-8' ) as file_log:
     for index, info_log in enumerate( list_info ):
@@ -52,6 +55,8 @@ def save_info_log( path_log, list_info ):
       print_info( info_log['info'], file = file_log )
 
 #endregion
+
+#region BACK_FUNCTIONS
 
 #region !<<UNUSE>>! ARXML_Short_Name_Path()
 # class ARXML_Short_Name_Path():
@@ -106,6 +111,7 @@ class ARXML_ELMT():
   LIST_DEF_SPEC: list = [
   ]
 
+  # Stores the XML context and immediately converts the element into the info structure.
   def __init__( self, elmt: etree._Element, ns: dict, info ):
     self.elmt = elmt
     self.ns = ns
@@ -114,10 +120,12 @@ class ARXML_ELMT():
     # self.init_info()
     self.to_info()
 
+  # Initializes each declared tag with an empty ref and val pair.
   def init_info( self ):
     for def_spec in self.LIST_DEF_SPEC:
       self.info[def_spec['tag']] = { 'ref': None, 'val': None }
 
+  # Parses configured child tags into the shared dict or list info structure.
   def to_info( self ):
     if isinstance( self.info, dict ):
       for def_spec in self.LIST_DEF_SPEC:
@@ -177,6 +185,7 @@ class ARXML_ELMT():
 class ARXML_ELMT_CNTR( ARXML_ELMT ):
   LIST_DEF_SPEC: list = [
     { 'tag': 'SHORT-NAME',                        'type': None,               'dict': { 'key': 'name',  'type': str   } },
+    { 'tag': 'DEFINITION-REF',                    'type': None,               'dict': { 'key': 'def',   'type': str   } },
     { 'tag': 'SUB-CONTAINERS' ,                   'type': 'ARXML_ELMT_CNTRS', 'dict': { 'key': 'cntrs', 'type': list  } },
   ]
 
@@ -189,6 +198,7 @@ class ARXML_ELMT_CNTRS( ARXML_ELMT ):
 class ARXML_ELMT_ELMT( ARXML_ELMT ):
   LIST_DEF_SPEC: list = [
     { 'tag': 'SHORT-NAME',                        'type': None,               'dict': { 'key': 'name',  'type': str   } },
+    { 'tag': 'DEFINITION-REF',                    'type': None,               'dict': { 'key': 'def',   'type': str   } },
     { 'tag': 'CONTAINERS',                        'type': 'ARXML_ELMT_CNTRS', 'dict': { 'key': 'cntrs', 'type': list  } },
   ]
 
@@ -217,6 +227,7 @@ class ARXML_ELMT_ROOT( ARXML_ELMT ):
 
 #region ARXML_DOC()
 class ARXML_DOC():
+  # Loads an ARXML document and builds its recursive element information tree.
   def __init__( self, path ):
     self.doc = etree.parse( path )  # get file and convert to tree
     self.elmt_root = self.doc.getroot() # get root xml tag -> output e. g. {http://autosar.org/schema/r4.0}AUTOSAR
@@ -226,7 +237,10 @@ class ARXML_DOC():
     self.root = ARXML_ELMT_ROOT( self.elmt_root, self.ns, self.info )
 #endregion
 
-#region Util Functions
+#endregion BACK_FUNCTIONS
+
+#region FRONT_FUNCTIONS
+# Returns the SHORT-NAME value stored in an ARXML element wrapper.
 def get_arxml_elmt_short_name( arxml_elmt ):
   if not isinstance( arxml_elmt.info, dict ):
     return None
@@ -238,6 +252,19 @@ def get_arxml_elmt_short_name( arxml_elmt ):
   return info_short_name['val']
 
 
+# Returns a simple val field for the requested info key.
+def get_arxml_elmt_info_value( arxml_elmt, key ):
+  if not isinstance( arxml_elmt.info, dict ):
+    return None
+
+  info_value = arxml_elmt.info.get( key )
+  if not isinstance( info_value, dict ):
+    return None
+
+  return info_value['val']
+
+
+# Yields all child parser objects referenced by the current info node.
 def iter_arxml_elmt_children( arxml_elmt ):
   if isinstance( arxml_elmt.info, dict ):
     for value in arxml_elmt.info.values():
@@ -249,15 +276,71 @@ def iter_arxml_elmt_children( arxml_elmt ):
         yield dict_info['ref']
 
 
+# Checks whether the wrapped XML element is an ECU configuration module.
 def is_arxml_module_configuration( arxml_elmt ):
   return etree.QName( arxml_elmt.elmt ).localname == 'ECUC-MODULE-CONFIGURATION-VALUES'
 
 
+# Recursively finds an ARXML element by its absolute SHORT-NAME path.
+def find_arxml_elmt_by_short_name_path( arxml_elmt, short_name_path, parent_path = '' ):
+  short_name = get_arxml_elmt_short_name( arxml_elmt )
+  current_path = parent_path
+
+  if short_name is not None:
+    current_path += '/' + short_name
+    if current_path == short_name_path:
+      return arxml_elmt
+
+  for child in iter_arxml_elmt_children( arxml_elmt ):
+    elmt_found = find_arxml_elmt_by_short_name_path( child, short_name_path, current_path )
+    if elmt_found is not None:
+      return elmt_found
+
+  return None
+
+
+# Stores the selected configuration element in the Streamlit session state.
+def on_arxml_elmt_selected( arxml_elmt ):
+  st.session_state.selectd = arxml_elmt
+
+
+# Resolves and displays the Spec definition referenced by a configuration element.
+def st_display_arxml_elmt_spec( arxml_doc_spec, arxml_elmt_cfg ):
+  definition_ref = get_arxml_elmt_info_value( arxml_elmt_cfg, 'DEFINITION-REF' )
+  if definition_ref is None:
+    st.info( '선택된 항목에 DEFINITION-REF가 없습니다.' )
+    return
+
+  arxml_elmt_spec = find_arxml_elmt_by_short_name_path( arxml_doc_spec.root, definition_ref )
+  if arxml_elmt_spec is None:
+    st.warning( 'Spec에서 DEFINITION-REF를 찾을 수 없습니다: {}'.format( definition_ref ) )
+    return
+
+  if is_arxml_module_configuration( arxml_elmt_cfg ):
+    with st.expander( 'DEFINITION-REF : ' + definition_ref, expanded = True ):
+      elmt_desc = arxml_elmt_spec.elmt.find( 'DESC/L-2', arxml_elmt_spec.ns )
+      if elmt_desc is None:
+        st.info( 'Spec에 DESC 정보가 없습니다.' )
+      else:
+        st.write( ''.join( elmt_desc.itertext() ).strip() )
+    return
+
+  with st.expander( 'DEFINITION-REF : ' + definition_ref, expanded = True ):
+    elmt_disp = copy.deepcopy( arxml_elmt_spec.elmt )
+    elmt_sub = elmt_disp.find( 'SUB-CONTAINERS', arxml_elmt_spec.ns )
+    if elmt_sub is not None:
+      elmt_disp.remove( elmt_sub )
+    etree.indent( elmt_disp, space = '  ' )
+    st.code( etree.tostring( elmt_disp, encoding = 'unicode' ), language = 'xml' )
+
+
+# Recursively renders all referenced child elements in the current Streamlit container.
 def st_display_arxml_elmt_children( arxml_elmt, current_path, display_module_tree ):
   for child in iter_arxml_elmt_children( arxml_elmt ):
     st_display_arxml_elmt_tree( child, current_path, display_module_tree )
 
 
+# Renders configuration modules and their descendants as nested Streamlit expanders.
 def st_display_arxml_elmt_tree( arxml_elmt, parent_path = '', display_module_tree = False ):
   short_name = get_arxml_elmt_short_name( arxml_elmt )
 
@@ -269,12 +352,17 @@ def st_display_arxml_elmt_tree( arxml_elmt, parent_path = '', display_module_tre
   display_module_tree = display_module_tree or is_arxml_module_configuration( arxml_elmt )
 
   if display_module_tree:
-    with st.expander( short_name, type = 'compact', key = current_path ):
+    with st.expander(
+      short_name,
+      type = 'compact',
+      key = current_path,
+      on_change = on_arxml_elmt_selected,
+      args = ( arxml_elmt, )
+    ):
       st_display_arxml_elmt_children( arxml_elmt, current_path, display_module_tree )
   else:
     st_display_arxml_elmt_children( arxml_elmt, current_path, display_module_tree )
-#endregion
-
+#endregion FRONT_FUNCTIONS
 
 path_arxml_cfg_spec = 'AUTRON_AUTOSAR_Dcm_ECU_Configuration_PDF.arxml'
 path_arxml_cfg = 'Ecud_Dcm.arxml'
@@ -339,5 +427,11 @@ with view_left:
     st_display_arxml_elmt_tree( st.session_state.arxml_doc_cfg.root )
 
 with view_right:
-  with st.container( border = True, height = 800 ):
+  with st.container( border = True, height = 390 ):
+    if st.session_state.selectd is not None:
+      st_display_arxml_elmt_spec( st.session_state.arxml_doc_cfg_spec, st.session_state.selectd )
+    else:
+      st.info( '좌측에서 Config 항목을 선택하세요.' )
+
+  with st.container( border = True, height = 390 ):
     st.write( '11111' )
