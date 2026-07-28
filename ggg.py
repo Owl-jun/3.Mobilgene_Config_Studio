@@ -5,7 +5,55 @@ import json
 import streamlit as st
 #endregion
 
-#region ARXML_Short_Name_Path()
+#region FOR_DEBUG_TREE
+def print_info( info, indent = '', visited = None, file = None ):
+  if visited is None:
+    visited = set()
+
+  if isinstance( info, (dict, list) ):
+    info_id = id( info )
+    if info_id in visited:
+      print( '{}<already visited: {} (id={})>'.format( indent, type( info ).__name__, info_id ), file = file )
+      return
+    visited.add( info_id )
+
+  if isinstance( info, dict ):
+    if 'ref' in info and 'val' in info:
+      ref = info['ref']
+      if ref is None:
+        print( '{}ref : None'.format( indent ), file = file )
+      else:
+        print( '{}ref : {} (id={})'.format( indent, type( ref ).__name__, id( ref ) ), file = file )
+
+      val = info['val']
+      if isinstance( val, (dict, list) ):
+        print( '{}val :'.format( indent ), file = file )
+        print_info( val, indent + '  ', visited, file )
+      else:
+        print( '{}val : {!r}'.format( indent, val ), file = file )
+    else:
+      for key, value in info.items():
+        print( '{}{}'.format( indent, key ), file = file )
+        print_info( value, indent + '  ', visited, file )
+  elif isinstance( info, list ):
+    for index, value in enumerate( info ):
+      print( '{}[{}]'.format( indent, index ), file = file )
+      print_info( value, indent + '  ', visited, file )
+  else:
+    print( '{}{!r}'.format( indent, info ), file = file )
+
+
+def save_info_log( path_log, list_info ):
+  with open( path_log, 'w', encoding = 'utf-8' ) as file_log:
+    for index, info_log in enumerate( list_info ):
+      if index > 0:
+        print( file = file_log )
+      print( '===== {} ====='.format( info_log['name'] ), file = file_log )
+      print_info( info_log['info'], file = file_log )
+
+#endregion
+
+#region !<<UNUSE>>! ARXML_Short_Name_Path()
 # class ARXML_Short_Name_Path():
 #   def __init__( self, short_name, elmt ):
 #     self.short_name = short_name
@@ -91,7 +139,7 @@ class ARXML_ELMT():
           info_sub['val'] = def_spec['dict']['type']()
           if def_spec['type'] is not None:
             info_sub['ref'] = globals()[def_spec['type']]( elmt_sub, self.ns, info_sub['val'] )
-#region UNUSE_FUNCTION_IN_ARXML_ELMT
+#region !<<UNUSE>>! UNUSE_FUNCTION_IN_ARXML_ELMT
   # def init_info( self ):
   #   for def_spec in self.LIST_DEF_SPEC:
   #     if def_spec['dict']['key'] is not None:
@@ -176,10 +224,9 @@ class ARXML_DOC():
     self.info = dict()
 
     self.root = ARXML_ELMT_ROOT( self.elmt_root, self.ns, self.info )
-    # print( json.dumps( self.info, indent = 2 ) )
-    print( self.info )
 #endregion
 
+#region Util Functions
 def get_arxml_elmt_short_name( arxml_elmt ):
   if not isinstance( arxml_elmt.info, dict ):
     return None
@@ -226,21 +273,29 @@ def st_display_arxml_elmt_tree( arxml_elmt, parent_path = '', display_module_tre
       st_display_arxml_elmt_children( arxml_elmt, current_path, display_module_tree )
   else:
     st_display_arxml_elmt_children( arxml_elmt, current_path, display_module_tree )
+#endregion
 
 
-
-
-
-
+path_arxml_cfg_spec = 'AUTRON_AUTOSAR_Dcm_ECU_Configuration_PDF.arxml'
+path_arxml_cfg = 'Ecud_Dcm.arxml'
 
 if 'arxml_doc_cfg_spec' not in st.session_state:
-  path_arxml_cfg_spec = 'AUTRON_AUTOSAR_Dcm_ECU_Configuration_PDF.arxml'
   st.session_state.arxml_doc_cfg_spec = ARXML_DOC( path_arxml_cfg_spec )
 if 'arxml_doc_cfg' not in st.session_state:
-  path_arxml_cfg = 'Ecud_Dcm.arxml'
   st.session_state.arxml_doc_cfg = ARXML_DOC( path_arxml_cfg )
 if 'selectd' not in st.session_state:
   st.session_state.selectd = None
+
+#region !<<UNUSE>>! FOR_DEBUG_TREE
+# path_info_log = os.path.join( os.path.dirname( os.path.abspath( __file__ ) ), 'arxml_info_log.txt' )
+# save_info_log(
+#   path_info_log,
+#   [
+#     { 'name': path_arxml_cfg_spec, 'info': st.session_state.arxml_doc_cfg_spec.info },
+#     { 'name': path_arxml_cfg,      'info': st.session_state.arxml_doc_cfg.info      },
+#   ]
+# )
+#endregion
 
 st.markdown(
   """
