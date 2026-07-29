@@ -3,7 +3,6 @@ from lxml import etree
 import os
 import json
 import copy
-import pandas as pd
 import streamlit as st
 #endregion
 
@@ -59,171 +58,131 @@ def save_info_log( path_log, list_info ):
 
 #region BACK_FUNCTIONS
 
-#region !<<UNUSE>>! ARXML_Short_Name_Path()
-# class ARXML_Short_Name_Path():
-#   def __init__( self, short_name, elmt ):
-#     self.short_name = short_name
-#     self.elmt = elmt
-#     self.children = []
-#     self.parent = None
+#region ARXML_Short_Name_Path()
+class ARXML_Short_Name_Path():
+  def __init__( self, short_name, elmt ):
+    self.short_name = short_name
+    self.elmt = elmt
+    self.children = []
+    self.parent = None
 
-#   def __iadd__( self, child ):
-#     if isinstance( child, ARXML_Short_Name_Path ):
-#       self.children.append( child )
-#       child.parent = self
-#       return self
-#     return NotImplemented
-# #region
-#   # def repr_with_children( self, indent = '' ):
-#   #   str_repr = indent + '- ' + self.short_name
-#   #   if self.children:
-#   #     str_repr += '\n' + '\n'.join( child.repr_with_children( indent + '  ' ) for child in self.children )
-#   #   return str_repr
+  def __iadd__( self, child ):
+    if isinstance( child, ARXML_Short_Name_Path ):
+      self.children.append( child )
+      child.parent = self
+      return self
+    return NotImplemented
 
-#   # def __repr__( self ):
-#   #   return self.repr_with_children()
-# #endregion
+  # def repr_with_children( self, indent = '' ):
+  #   str_repr = indent + '- ' + self.short_name
+  #   if self.children:
+  #     str_repr += '\n' + '\n'.join( child.repr_with_children( indent + '  ' ) for child in self.children )
+  #   return str_repr
 
-#   def absolute_path( self ):
-#     if self.parent != None:
-#       return self.parent.absolute_path() + '/' + self.short_name
-#     else:
-#       return '/' + self.short_name
+  # def __repr__( self ):
+  #   return self.repr_with_children()
 
-#   def find( self, str_short_name_path ):
-#     list_short_name = str_short_name_path.split( '/', 1 )
-#     if not list_short_name[0]:
-#       list_short_name = list_short_name[1].split( '/', 1 )
+  def absolute_path( self ):
+    if self.parent == None:
+      return '/' + self.short_name
+    else:
+      return self.parent.absolute_path() + '/' + self.short_name
 
-#     if self.short_name == list_short_name[0]:
-#       list_short_name.pop( 0 )
-#       if list_short_name:
-#         for child in self.children:
-#           short_name_path = child.find( list_short_name[0] )
-#           if short_name_path:
-#             return child.find( list_short_name[0] )
-#       else:
-#         return self
-#     return None
+  def find( self, str_short_name_path ):
+    list_short_name = str_short_name_path.split( '/', 1 )
+    if not list_short_name[0]:
+      list_short_name = list_short_name[1].split( '/', 1 )
+
+    if self.short_name == list_short_name[0]:
+      list_short_name.pop( 0 )
+      if list_short_name:
+        for child in self.children:
+          short_name_path = child.find( list_short_name[0] )
+          if short_name_path:
+            return child.find( list_short_name[0] )
+      else:
+        return self
+    return None
 #endregion
 
 #region ARXML_ELMT()
 class ARXML_ELMT():
-  LIST_DEF_SPEC: list = [
-  ]
-
-  # Stores the XML context and immediately converts the element into the info structure.
-  def __init__( self, elmt: etree._Element, ns: dict, info ):
+  def __init__( self, elmt: etree._Element, ns: dict, info, short_name_path_parent ):
     self.elmt = elmt
     self.ns = ns
     self.info = info
 
-    # self.init_info()
+    self.elmts_sub = []
+    self.elmts_cntr = []
+    self.elmts_sub_cntr = []
+    self.elmts_param = []
+    self.elmts_ref = []
+    self.elmts_temp = []
+
+    self.short_name_path_parent = short_name_path_parent
+    self.short_name_path = None
+    self.str_desc_ref = None
+
     self.to_info()
 
-  # Initializes each declared tag with an empty ref and val pair.
-  def init_info( self ):
-    for def_spec in self.LIST_DEF_SPEC:
-      self.info[def_spec['tag']] = { 'ref': None, 'val': None }
-
-  # Parses configured child tags into the shared dict or list info structure.
   def to_info( self ):
-    if isinstance( self.info, dict ):
-      for def_spec in self.LIST_DEF_SPEC:
-        self.info[def_spec['tag']] = { 'ref': None, 'val': None } 
-        elmt_sub = self.elmt.find( def_spec['tag'], self.ns ) 
-        if elmt_sub is not None:
-          if def_spec['dict']['type'] in [list, dict]:
-            self.info[def_spec['tag']]['val'] = def_spec['dict']['type']()
-            if def_spec['type'] is not None:
-              self.info[def_spec['tag']]['ref'] = globals()[def_spec['type']]( elmt_sub, self.ns, self.info[def_spec['tag']]['val'] )
-          else:
-            self.info[def_spec['tag']]['val'] = def_spec['dict']['type']( elmt_sub.text )
+    if self.elmt.text:
+      self.info["#text"] = self.elmt.text.strip()
+
+    if self.elmt.attrib:
+      self.info["@attributes"] = self.elmt.attrib
+
+    str_tag = self.elmt.tag.replace( f'{{{self.ns[None]}}}', '' )
+    if str_tag == 'CONTAINERS':
+      elmts_child = self.elmts_cntr
+    elif str_tag == 'SUB-CONTAINERS':
+      elmts_child = self.elmts_sub_cntr
+    elif str_tag == 'PARAMETERS':
+      elmts_child = self.elmts_param
+    elif str_tag == 'REFERENCES':
+      elmts_child = self.elmts_ref
     else:
-      for def_spec in self.LIST_DEF_SPEC:
-        elmts_sub = self.elmt.findall( def_spec['tag'], self.ns )
-        for elmt_sub in elmts_sub:
-          info_sub = { 'ref': None, 'val': None }
-          self.info.append( info_sub )
-          info_sub['val'] = def_spec['dict']['type']()
-          if def_spec['type'] is not None:
-            info_sub['ref'] = globals()[def_spec['type']]( elmt_sub, self.ns, info_sub['val'] )
-#region !<<UNUSE>>! UNUSE_FUNCTION_IN_ARXML_ELMT
-  # def init_info( self ):
-  #   for def_spec in self.LIST_DEF_SPEC:
-  #     if def_spec['dict']['key'] is not None:
-  #       if def_spec['dict']['type'] in [list, dict]:
-  #         self.info[def_spec['dict']['key']] = def_spec['dict']['type']()
-  #       else:
-  #         self.info[def_spec['dict']['key']] = None
+      elmts_child = self.elmts_temp
 
-  # def to_info( self ):
-  #   if isinstance( self.info, list ):
-  #     for def_spec in self.LIST_DEF_SPEC:
-  #       elmts = self.elmt.findall( def_spec['tag'], self.ns )
-  #       for elmt in elmts:
-  #         info = def_spec['dict']['type']()
-  #         self.info.append( info )
-  #         globals()[def_spec['type']]( elmt, self.ns, info )
-  #   else:
-  #     for def_spec in self.LIST_DEF_SPEC:
-  #       if def_spec['dict']['type'] in [list, dict]:
-  #         elmt = self.elmt.find( def_spec['tag'], self.ns )
-  #         if elmt is not None:
-  #           globals()[def_spec['type']]( elmt, self.ns, self.info[def_spec['dict']['key']] )
-  #       else:
-  #         elmt = self.elmt.find( def_spec['tag'], self.ns )
-  #         if elmt is not None:
-  #           if def_spec['dict']['key'] is None:
-  #             aaa = ''
-  #             # def_spec['type']( self.info )
-  #           else:
-  #             self.info[def_spec['dict']['key']] = def_spec['dict']['type']( elmt.text )
-#endregion
-#endregion
+    short_name_path = self.short_name_path_parent
+    child_short_name = self.elmt.find( 'SHORT-NAME', self.ns )
+    if child_short_name is not None:
+      self.short_name_path = ARXML_Short_Name_Path( child_short_name.text, self )
+      if self.short_name_path_parent is not None:
+        self.short_name_path_parent += self.short_name_path
+      short_name_path = self.short_name_path
 
-#region ARXML_ELMT DEFINITIONS
-class ARXML_ELMT_CNTR( ARXML_ELMT ):
-  LIST_DEF_SPEC: list = [
-    { 'tag': 'SHORT-NAME',                        'type': None,               'dict': { 'key': 'name',  'type': str   } },
-    { 'tag': 'DEFINITION-REF',                    'type': None,               'dict': { 'key': 'def',   'type': str   } },
-    { 'tag': 'SUB-CONTAINERS' ,                   'type': 'ARXML_ELMT_CNTRS', 'dict': { 'key': 'cntrs', 'type': list  } },
-  ]
+    child_def_ref = self.elmt.find( 'DEFINITION-REF', self.ns )
+    if child_def_ref is not None:
+      self.str_desc_ref = child_def_ref.text
 
-class ARXML_ELMT_CNTRS( ARXML_ELMT ):
-  LIST_DEF_SPEC: list = [
-    { 'tag': 'ECUC-CONTAINER-VALUE',              'type': 'ARXML_ELMT_CNTR',  'dict': { 'key': None,    'type': dict  } },
-    { 'tag': 'ECUC-PARAM-CONF-CONTAINER-DEF',     'type': 'ARXML_ELMT_CNTR',  'dict': { 'key': None,    'type': dict  } },
-  ]
+    children = list( self.elmt )
+    for child in children:
+      if child.tag is etree.Comment:
+        continue
 
-class ARXML_ELMT_ELMT( ARXML_ELMT ):
-  LIST_DEF_SPEC: list = [
-    { 'tag': 'SHORT-NAME',                        'type': None,               'dict': { 'key': 'name',  'type': str   } },
-    { 'tag': 'DEFINITION-REF',                    'type': None,               'dict': { 'key': 'def',   'type': str   } },
-    { 'tag': 'CONTAINERS',                        'type': 'ARXML_ELMT_CNTRS', 'dict': { 'key': 'cntrs', 'type': list  } },
-  ]
+      info_child = {}
+      elmt_child = ARXML_ELMT( child, self.ns, info_child, short_name_path )
+      self.elmts_sub.append( elmt_child )
+      elmts_child.append( elmt_child )
 
-class ARXML_ELMT_ELMTS( ARXML_ELMT ):
-  LIST_DEF_SPEC: list = [
-    { 'tag': 'ECUC-MODULE-CONFIGURATION-VALUES',  'type': 'ARXML_ELMT_ELMT',  'dict': { 'key': None,    'type': dict  } },
-    { 'tag': 'ECUC-MODULE-DEF',                   'type': 'ARXML_ELMT_ELMT',  'dict': { 'key': None,    'type': dict  } },
-  ]
+      str_tag = child.tag.replace( f'{{{self.ns[None]}}}', '' )
+      if str_tag not in self.info:
+        self.info[str_tag] = info_child
+      else:
+        if not isinstance( self.info[str_tag], list ):
+          self.info[str_tag] = [ self.info[str_tag] ]
+        self.info[str_tag].append( info_child )
 
-class ARXML_ELMT_PKG( ARXML_ELMT ):
-  LIST_DEF_SPEC: list = [
-    { 'tag': 'SHORT-NAME',                        'type': None,               'dict': { 'key': 'name',  'type': str   } },
-    { 'tag': 'ELEMENTS',                          'type': 'ARXML_ELMT_ELMTS', 'dict': { 'key': 'elmts', 'type': list  } },
-  ]
-
-class ARXML_ELMT_PKGS( ARXML_ELMT ):
-  LIST_DEF_SPEC: list = [
-    { 'tag': 'AR-PACKAGE',                        'type': 'ARXML_ELMT_PKG',   'dict': { 'key': None,    'type': dict  } },
-  ]
-
-class ARXML_ELMT_ROOT( ARXML_ELMT ):
-  LIST_DEF_SPEC: list = [
-    { 'tag': 'AR-PACKAGES',                       'type': 'ARXML_ELMT_PKGS',  'dict': { 'key': 'pkgs',  'type': list  } },
-  ]
+  def find_short_name_path_root( self ):
+    if self.short_name_path is not None:
+      return self.short_name_path
+    else:
+      for elmt_sub in self.elmts_sub:
+        short_name_path = elmt_sub.find_short_name_path_root()
+        if short_name_path is not None:
+          return short_name_path
+    return None
 #endregion
 
 #region ARXML_DOC()
@@ -235,52 +194,40 @@ class ARXML_DOC():
     self.ns = self.elmt_root.nsmap  # save {namespace(ns)} info
     self.info = dict()
 
-    self.root = ARXML_ELMT_ROOT( self.elmt_root, self.ns, self.info )
+    self.root = ARXML_ELMT( self.elmt_root, self.ns, self.info, None )
+    self.short_name_path_root = self.root.find_short_name_path_root()
+    # print( json.dumps( self.info, indent = 2 ) )
+    # print( self.info )
 #endregion
 
-#endregion BACK_FUNCTIONS
-
-#region FRONT_FUNCTIONS
 # Returns the SHORT-NAME value stored in an ARXML element wrapper.
 def get_arxml_elmt_short_name( arxml_elmt ):
-  if not isinstance( arxml_elmt.info, dict ):
+  if arxml_elmt.short_name_path is None:
     return None
-
-  info_short_name = arxml_elmt.info.get( 'SHORT-NAME' )
-  if not isinstance( info_short_name, dict ):
-    return None
-
-  return info_short_name['val']
+  return arxml_elmt.short_name_path.short_name
 
 
 # Returns a simple val field for the requested info key.
 def get_arxml_elmt_info_value( arxml_elmt, key ):
-  if not isinstance( arxml_elmt.info, dict ):
-    return None
+  if key == 'SHORT-NAME':
+    return get_arxml_elmt_short_name( arxml_elmt )
+  if key == 'DEFINITION-REF':
+    return arxml_elmt.str_desc_ref
 
-  info_value = arxml_elmt.info.get( key )
-  if not isinstance( info_value, dict ):
+  elmt_value = arxml_elmt.elmt.find( key, arxml_elmt.ns )
+  if elmt_value is None:
     return None
-
-  return info_value['val']
+  return elmt_value.text
 
 
 # Yields all child parser objects referenced by the current info node.
 def iter_arxml_elmt_children( arxml_elmt ):
-  if isinstance( arxml_elmt.info, dict ):
-    for value in arxml_elmt.info.values():
-      if isinstance( value, dict ) and value['ref'] is not None:
-        yield value['ref']
-  elif isinstance( arxml_elmt.info, list ):
-    for dict_info in arxml_elmt.info:
-      if dict_info['ref'] is not None:
-        yield dict_info['ref']
+  yield from arxml_elmt.elmts_sub
 
 
 # Checks whether the wrapped XML element is an ECU configuration module.
 def is_arxml_module_configuration( arxml_elmt ):
   return etree.QName( arxml_elmt.elmt ).localname == 'ECUC-MODULE-CONFIGURATION-VALUES'
-
 
 # Recursively finds an ARXML element by its absolute SHORT-NAME path.
 def find_arxml_elmt_by_short_name_path( arxml_elmt, short_name_path, parent_path = '' ):
@@ -299,11 +246,27 @@ def find_arxml_elmt_by_short_name_path( arxml_elmt, short_name_path, parent_path
 
   return None
 
+# Returns numeric constraints declared by the matching parameter definition.
+def get_dcm_number_limits( arxml_doc_spec, definition_ref, parameter_type ):
+  arxml_elmt_spec = find_arxml_elmt_by_short_name_path( arxml_doc_spec.root, definition_ref )
+  if arxml_elmt_spec is None:
+    return None, None
 
+  converter = int if parameter_type == 'integer' else float
+  values = []
+  for tag in [ 'MIN', 'MAX' ]:
+    elmt_value = arxml_elmt_spec.elmt.find( tag, arxml_elmt_spec.ns )
+    try:
+      values.append( converter( elmt_value.text, 0 ) if parameter_type == 'integer' else converter( elmt_value.text ) )
+    except ( AttributeError, TypeError, ValueError ):
+      values.append( None )
+  return values[0], values[1]
+#endregion BACK_FUNCTIONS
+
+#region FRONT_FUNCTIONS
 # Stores the selected configuration element in the Streamlit session state.
 def on_arxml_elmt_selected( arxml_elmt ):
   st.session_state.selectd = arxml_elmt
-
 
 # Resolves and displays the Spec definition referenced by a configuration element.
 def st_display_arxml_elmt_spec( arxml_doc_spec, arxml_elmt_cfg ):
@@ -361,23 +324,6 @@ def format_dcm_parameter_value( value, parameter_type, original_text ):
   return str( value )
 
 
-# Returns numeric constraints declared by the matching parameter definition.
-def get_dcm_number_limits( arxml_doc_spec, definition_ref, parameter_type ):
-  arxml_elmt_spec = find_arxml_elmt_by_short_name_path( arxml_doc_spec.root, definition_ref )
-  if arxml_elmt_spec is None:
-    return None, None
-
-  converter = int if parameter_type == 'integer' else float
-  values = []
-  for tag in [ 'MIN', 'MAX' ]:
-    elmt_value = arxml_elmt_spec.elmt.find( tag, arxml_elmt_spec.ns )
-    try:
-      values.append( converter( elmt_value.text, 0 ) if parameter_type == 'integer' else converter( elmt_value.text ) )
-    except ( AttributeError, TypeError, ValueError ):
-      values.append( None )
-  return values[0], values[1]
-
-
 # Renders DCM parameter values with a column widget selected from each AUTOSAR type.
 def st_display_dcm_parameter_editor( arxml_doc_spec, arxml_elmt_cfg ):
   definition_ref = get_arxml_elmt_info_value( arxml_elmt_cfg, 'DEFINITION-REF' )
@@ -393,6 +339,8 @@ def st_display_dcm_parameter_editor( arxml_doc_spec, arxml_elmt_cfg ):
   editor_values = {}
   column_config = {}
   parameter_by_column = {}
+  parameter_definition_by_column = {}
+  parameter_definition_refs = set()
 
   for elmt_parameter in elmt_parameter_values:
     elmt_definition_ref = elmt_parameter.find( 'DEFINITION-REF', arxml_elmt_cfg.ns )
@@ -403,6 +351,7 @@ def st_display_dcm_parameter_editor( arxml_doc_spec, arxml_elmt_cfg ):
     parameter_definition_ref = elmt_definition_ref.text
     parameter_name = parameter_definition_ref.rsplit( '/', 1 )[-1]
     destination = elmt_definition_ref.get( 'DEST', '' )
+    parameter_definition_refs.add( parameter_definition_ref )
 
     if destination == 'ECUC-BOOLEAN-PARAM-DEF':
       parameter_type = 'boolean'
@@ -410,6 +359,8 @@ def st_display_dcm_parameter_editor( arxml_doc_spec, arxml_elmt_cfg ):
       parameter_type = 'integer'
     elif destination == 'ECUC-FLOAT-PARAM-DEF':
       parameter_type = 'float'
+    elif destination == 'ECUC-FUNCTION-NAME-DEF':
+      parameter_type = 'function'
     else:
       continue
 
@@ -432,44 +383,113 @@ def st_display_dcm_parameter_editor( arxml_doc_spec, arxml_elmt_cfg ):
         help_text = ''.join( elmt_desc.itertext() ).strip()
 
     if parameter_type == 'boolean':
-      column_config[column_name] = st.column_config.CheckboxColumn(
-        parameter_name,
-        help = help_text,
-        required = True,
-      )
+      column_config[column_name] = {
+        'label': parameter_name,
+        'help': help_text,
+      }
+    elif parameter_type == 'function':
+      column_config[column_name] = {
+        'label': parameter_name,
+        'help': help_text,
+      }
     else:
       min_value, max_value = get_dcm_number_limits(
         arxml_doc_spec,
         parameter_definition_ref,
         parameter_type,
       )
-      column_config[column_name] = st.column_config.NumberColumn(
-        parameter_name,
-        help = help_text,
-        min_value = min_value,
-        max_value = max_value,
-        step = 1 if parameter_type == 'integer' else None,
-        format = '%d' if parameter_type == 'integer' else None,
-        required = True,
-      )
+      column_config[column_name] = {
+        'label': parameter_name,
+        'help': help_text,
+        'min_value': min_value,
+        'max_value': max_value,
+        'step': 1 if parameter_type == 'integer' else None,
+        'format': '%d' if parameter_type == 'integer' else None,
+      }
 
     parameter_by_column[column_name] = ( elmt_value, parameter_type, elmt_value.text )
 
+  arxml_elmt_spec = find_arxml_elmt_by_short_name_path( arxml_doc_spec.root, definition_ref )
+  if arxml_elmt_spec is not None:
+    elmt_parameters = arxml_elmt_spec.elmt.find( 'PARAMETERS', arxml_elmt_spec.ns )
+    if elmt_parameters is not None:
+      for elmt_function in elmt_parameters.findall( 'ECUC-FUNCTION-NAME-DEF', arxml_elmt_spec.ns ):
+        elmt_short_name = elmt_function.find( 'SHORT-NAME', arxml_elmt_spec.ns )
+        if elmt_short_name is None:
+          continue
+
+        parameter_name = elmt_short_name.text
+        parameter_definition_ref = definition_ref + '/' + parameter_name
+        if parameter_definition_ref in parameter_definition_refs:
+          continue
+
+        column_name = parameter_name
+        suffix = 2
+        while column_name in editor_values:
+          column_name = '{} ({})'.format( parameter_name, suffix )
+          suffix += 1
+
+        elmt_desc = elmt_function.find( 'DESC/L-2', arxml_elmt_spec.ns )
+        help_text = None
+        if elmt_desc is not None:
+          help_text = ''.join( elmt_desc.itertext() ).strip()
+
+        editor_values[column_name] = ''
+        column_config[column_name] = {
+          'label': parameter_name,
+          'help': help_text,
+        }
+        parameter_by_column[column_name] = ( None, 'function', '' )
+        parameter_definition_by_column[column_name] = parameter_definition_ref
+
   if not editor_values:
-    st.info( '편집 가능한 Boolean/숫자 DCM 파라미터가 없습니다.' )
+    st.info( '편집 가능한 DCM 파라미터가 없습니다.' )
     return
 
-  edited_df = st.data_editor(
-    pd.DataFrame( [ editor_values ] ),
-    column_config = column_config,
-    hide_index = True,
-    key = 'dcm_parameter_editor:' + arxml_elmt_cfg.elmt.getroottree().getpath( arxml_elmt_cfg.elmt ),
-    width = 'stretch',
-  )
-
   for column_name, ( elmt_value, parameter_type, original_text ) in parameter_by_column.items():
-    edited_value = edited_df.at[0, column_name]
-    elmt_value.text = format_dcm_parameter_value( edited_value, parameter_type, original_text )
+    widget_key = 'dcm_parameter_editor:{}:{}'.format(
+      arxml_elmt_cfg.elmt.getroottree().getpath( arxml_elmt_cfg.elmt ),
+      column_name,
+    )
+    if parameter_type == 'boolean':
+      edited_value = st.checkbox(
+        column_config[column_name]['label'],
+        value = editor_values[column_name],
+        help = column_config[column_name]['help'],
+        key = widget_key,
+      )
+    elif parameter_type == 'function':
+      edited_value = st.text_input(
+        column_config[column_name]['label'],
+        value = editor_values[column_name],
+        help = column_config[column_name]['help'],
+        key = widget_key,
+      )
+    else:
+      edited_value = st.number_input(
+        column_config[column_name]['label'],
+        value = editor_values[column_name],
+        min_value = column_config[column_name]['min_value'],
+        max_value = column_config[column_name]['max_value'],
+        step = column_config[column_name]['step'],
+        format = column_config[column_name]['format'],
+        help = column_config[column_name]['help'],
+        key = widget_key,
+      )
+
+    if elmt_value is not None:
+      elmt_value.text = format_dcm_parameter_value( edited_value, parameter_type, original_text )
+    elif str( edited_value ):
+      namespace = '{{{}}}'.format( arxml_elmt_cfg.ns[None] )
+      elmt_parameter = etree.SubElement(
+        elmt_parameter_values,
+        namespace + 'ECUC-TEXTUAL-PARAM-VALUE',
+      )
+      elmt_definition_ref = etree.SubElement( elmt_parameter, namespace + 'DEFINITION-REF' )
+      elmt_definition_ref.set( 'DEST', 'ECUC-FUNCTION-NAME-DEF' )
+      elmt_definition_ref.text = parameter_definition_by_column[column_name]
+      elmt_value = etree.SubElement( elmt_parameter, namespace + 'VALUE' )
+      elmt_value.text = str( edited_value )
 
 
 # Recursively renders all referenced child elements in the current Streamlit container.
@@ -490,14 +510,23 @@ def st_display_arxml_elmt_tree( arxml_elmt, parent_path = '', display_module_tre
   display_module_tree = display_module_tree or is_arxml_module_configuration( arxml_elmt )
 
   if display_module_tree:
-    with st.expander(
-      short_name,
-      type = 'compact',
-      key = current_path,
-      on_change = on_arxml_elmt_selected,
-      args = ( arxml_elmt, )
-    ):
-      st_display_arxml_elmt_children( arxml_elmt, current_path, display_module_tree )
+    if arxml_elmt.short_name_path.children:
+      with st.expander(
+        short_name,
+        type = 'compact',
+        key = current_path,
+        on_change = on_arxml_elmt_selected,
+        args = ( arxml_elmt, )
+      ):
+        st_display_arxml_elmt_children( arxml_elmt, current_path, display_module_tree )
+    else:
+      st.button(
+        short_name,
+        type = 'tertiary',
+        key = current_path,
+        on_click = on_arxml_elmt_selected,
+        args = ( arxml_elmt, )
+      )
   else:
     st_display_arxml_elmt_children( arxml_elmt, current_path, display_module_tree )
 #endregion FRONT_FUNCTIONS
