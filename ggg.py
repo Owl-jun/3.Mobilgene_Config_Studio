@@ -3,6 +3,7 @@ from lxml import etree
 import os
 import json
 import copy
+import pandas as pd
 import streamlit as st
 #endregion
 
@@ -334,6 +335,143 @@ def st_display_arxml_elmt_spec( arxml_doc_spec, arxml_elmt_cfg ):
     st.code( etree.tostring( elmt_disp, encoding = 'unicode' ), language = 'xml' )
 
 
+# Converts an AUTOSAR numerical VALUE into the Python type used by data_editor.
+def parse_dcm_parameter_value( value_text, parameter_type ):
+  if parameter_type == 'boolean':
+    return value_text.strip().lower() in [ '1', 'true' ]
+  if parameter_type == 'integer':
+    return int( value_text, 0 )
+  if parameter_type == 'float':
+    return float( value_text )
+  return value_text
+
+
+# Keeps the source ARXML's boolean and hexadecimal notation when an editor value changes.
+def format_dcm_parameter_value( value, parameter_type, original_text ):
+  if parameter_type == 'boolean':
+    if original_text.strip().lower() in [ 'true', 'false' ]:
+      return 'true' if bool( value ) else 'false'
+    return '1' if bool( value ) else '0'
+  if parameter_type == 'integer':
+    if original_text.strip().lower().startswith( '0x' ):
+      return '0x{:X}'.format( int( value ) )
+    return str( int( value ) )
+  if parameter_type == 'float':
+    return str( float( value ) )
+  return str( value )
+
+
+# Returns numeric constraints declared by the matching parameter definition.
+def get_dcm_number_limits( arxml_doc_spec, definition_ref, parameter_type ):
+  arxml_elmt_spec = find_arxml_elmt_by_short_name_path( arxml_doc_spec.root, definition_ref )
+  if arxml_elmt_spec is None:
+    return None, None
+
+  converter = int if parameter_type == 'integer' else float
+  values = []
+  for tag in [ 'MIN', 'MAX' ]:
+    elmt_value = arxml_elmt_spec.elmt.find( tag, arxml_elmt_spec.ns )
+    try:
+      values.append( converter( elmt_value.text, 0 ) if parameter_type == 'integer' else converter( elmt_value.text ) )
+    except ( AttributeError, TypeError, ValueError ):
+      values.append( None )
+  return values[0], values[1]
+
+
+# Renders DCM parameter values with a column widget selected from each AUTOSAR type.
+def st_display_dcm_parameter_editor( arxml_doc_spec, arxml_elmt_cfg ):
+  definition_ref = get_arxml_elmt_info_value( arxml_elmt_cfg, 'DEFINITION-REF' )
+  if definition_ref is None or not definition_ref.startswith( '/AUTRON/Dcm/' ):
+    st.info( 'DCM 컨테이너를 선택하면 파라미터 편집기가 표시됩니다.' )
+    return
+
+  elmt_parameter_values = arxml_elmt_cfg.elmt.find( 'PARAMETER-VALUES', arxml_elmt_cfg.ns )
+  if elmt_parameter_values is None:
+    st.info( '선택한 DCM 컨테이너에 파라미터 값이 없습니다.' )
+    return
+
+  editor_values = {}
+  column_config = {}
+  parameter_by_column = {}
+
+  for elmt_parameter in elmt_parameter_values:
+    elmt_definition_ref = elmt_parameter.find( 'DEFINITION-REF', arxml_elmt_cfg.ns )
+    elmt_value = elmt_parameter.find( 'VALUE', arxml_elmt_cfg.ns )
+    if elmt_definition_ref is None or elmt_value is None or elmt_value.text is None:
+      continue
+
+    parameter_definition_ref = elmt_definition_ref.text
+    parameter_name = parameter_definition_ref.rsplit( '/', 1 )[-1]
+    destination = elmt_definition_ref.get( 'DEST', '' )
+
+    if destination == 'ECUC-BOOLEAN-PARAM-DEF':
+      parameter_type = 'boolean'
+    elif destination == 'ECUC-INTEGER-PARAM-DEF':
+      parameter_type = 'integer'
+    elif destination == 'ECUC-FLOAT-PARAM-DEF':
+      parameter_type = 'float'
+    else:
+      continue
+
+    column_name = parameter_name
+    suffix = 2
+    while column_name in editor_values:
+      column_name = '{} ({})'.format( parameter_name, suffix )
+      suffix += 1
+
+    try:
+      editor_values[column_name] = parse_dcm_parameter_value( elmt_value.text, parameter_type )
+    except ValueError:
+      continue
+
+    arxml_elmt_spec = find_arxml_elmt_by_short_name_path( arxml_doc_spec.root, parameter_definition_ref )
+    help_text = None
+    if arxml_elmt_spec is not None:
+      elmt_desc = arxml_elmt_spec.elmt.find( 'DESC/L-2', arxml_elmt_spec.ns )
+      if elmt_desc is not None:
+        help_text = ''.join( elmt_desc.itertext() ).strip()
+
+    if parameter_type == 'boolean':
+      column_config[column_name] = st.column_config.CheckboxColumn(
+        parameter_name,
+        help = help_text,
+        required = True,
+      )
+    else:
+      min_value, max_value = get_dcm_number_limits(
+        arxml_doc_spec,
+        parameter_definition_ref,
+        parameter_type,
+      )
+      column_config[column_name] = st.column_config.NumberColumn(
+        parameter_name,
+        help = help_text,
+        min_value = min_value,
+        max_value = max_value,
+        step = 1 if parameter_type == 'integer' else None,
+        format = '%d' if parameter_type == 'integer' else None,
+        required = True,
+      )
+
+    parameter_by_column[column_name] = ( elmt_value, parameter_type, elmt_value.text )
+
+  if not editor_values:
+    st.info( '편집 가능한 Boolean/숫자 DCM 파라미터가 없습니다.' )
+    return
+
+  edited_df = st.data_editor(
+    pd.DataFrame( [ editor_values ] ),
+    column_config = column_config,
+    hide_index = True,
+    key = 'dcm_parameter_editor:' + arxml_elmt_cfg.elmt.getroottree().getpath( arxml_elmt_cfg.elmt ),
+    width = 'stretch',
+  )
+
+  for column_name, ( elmt_value, parameter_type, original_text ) in parameter_by_column.items():
+    edited_value = edited_df.at[0, column_name]
+    elmt_value.text = format_dcm_parameter_value( edited_value, parameter_type, original_text )
+
+
 # Recursively renders all referenced child elements in the current Streamlit container.
 def st_display_arxml_elmt_children( arxml_elmt, current_path, display_module_tree ):
   for child in iter_arxml_elmt_children( arxml_elmt ):
@@ -431,7 +569,13 @@ with view_right:
     if st.session_state.selectd is not None:
       st_display_arxml_elmt_spec( st.session_state.arxml_doc_cfg_spec, st.session_state.selectd )
     else:
-      st.info( '좌측에서 Config 항목을 선택하세요.' )
+      st.info( 'DEFINITION-REF' )
 
   with st.container( border = True, height = 390 ):
-    st.write( '11111' )
+    if st.session_state.selectd is not None:
+      st_display_dcm_parameter_editor(
+        st.session_state.arxml_doc_cfg_spec,
+        st.session_state.selectd,
+      )
+    else:
+      st.info( 'DCM 컨테이너를 선택하면 파라미터 편집기가 표시됩니다.' )
