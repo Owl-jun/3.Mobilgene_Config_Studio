@@ -1,59 +1,7 @@
 #region INCLUDES
 from lxml import etree
-import os
-import json
 import copy
 import streamlit as st
-#endregion
-
-#region FOR_DEBUG_TREE
-# Recursively prints the parsed info structure in a readable tree format.
-def print_info( info, indent = '', visited = None, file = None ):
-  if visited is None:
-    visited = set()
-
-  if isinstance( info, (dict, list) ):
-    info_id = id( info )
-    if info_id in visited:
-      print( '{}<already visited: {} (id={})>'.format( indent, type( info ).__name__, info_id ), file = file )
-      return
-    visited.add( info_id )
-
-  if isinstance( info, dict ):
-    if 'ref' in info and 'val' in info:
-      ref = info['ref']
-      if ref is None:
-        print( '{}ref : None'.format( indent ), file = file )
-      else:
-        print( '{}ref : {} (id={})'.format( indent, type( ref ).__name__, id( ref ) ), file = file )
-
-      val = info['val']
-      if isinstance( val, (dict, list) ):
-        print( '{}val :'.format( indent ), file = file )
-        print_info( val, indent + '  ', visited, file )
-      else:
-        print( '{}val : {!r}'.format( indent, val ), file = file )
-    else:
-      for key, value in info.items():
-        print( '{}{}'.format( indent, key ), file = file )
-        print_info( value, indent + '  ', visited, file )
-  elif isinstance( info, list ):
-    for index, value in enumerate( info ):
-      print( '{}[{}]'.format( indent, index ), file = file )
-      print_info( value, indent + '  ', visited, file )
-  else:
-    print( '{}{!r}'.format( indent, info ), file = file )
-
-
-# Writes one or more parsed info trees to a UTF-8 text log file.
-def save_info_log( path_log, list_info ):
-  with open( path_log, 'w', encoding = 'utf-8' ) as file_log:
-    for index, info_log in enumerate( list_info ):
-      if index > 0:
-        print( file = file_log )
-      print( '===== {} ====='.format( info_log['name'] ), file = file_log )
-      print_info( info_log['info'], file = file_log )
-
 #endregion
 
 #region BACK_FUNCTIONS
@@ -107,43 +55,19 @@ class ARXML_Short_Name_Path():
 
 #region ARXML_ELMT()
 class ARXML_ELMT():
-  def __init__( self, elmt: etree._Element, ns: dict, info, short_name_path_parent ):
+  def __init__( self, elmt: etree._Element, ns: dict, short_name_path_parent ):
     self.elmt = elmt
     self.ns = ns
-    self.info = info
 
     self.elmts_sub = []
-    self.elmts_cntr = []
-    self.elmts_sub_cntr = []
-    self.elmts_param = []
-    self.elmts_ref = []
-    self.elmts_temp = []
 
     self.short_name_path_parent = short_name_path_parent
     self.short_name_path = None
     self.str_desc_ref = None
 
-    self.to_info()
+    self.parse()
 
-  def to_info( self ):
-    if self.elmt.text:
-      self.info["#text"] = self.elmt.text.strip()
-
-    if self.elmt.attrib:
-      self.info["@attributes"] = self.elmt.attrib
-
-    str_tag = self.elmt.tag.replace( f'{{{self.ns[None]}}}', '' )
-    if str_tag == 'CONTAINERS':
-      elmts_child = self.elmts_cntr
-    elif str_tag == 'SUB-CONTAINERS':
-      elmts_child = self.elmts_sub_cntr
-    elif str_tag == 'PARAMETERS':
-      elmts_child = self.elmts_param
-    elif str_tag == 'REFERENCES':
-      elmts_child = self.elmts_ref
-    else:
-      elmts_child = self.elmts_temp
-
+  def parse( self ):
     short_name_path = self.short_name_path_parent
     child_short_name = self.elmt.find( 'SHORT-NAME', self.ns )
     if child_short_name is not None:
@@ -161,18 +85,8 @@ class ARXML_ELMT():
       if child.tag is etree.Comment:
         continue
 
-      info_child = {}
-      elmt_child = ARXML_ELMT( child, self.ns, info_child, short_name_path )
+      elmt_child = ARXML_ELMT( child, self.ns, short_name_path )
       self.elmts_sub.append( elmt_child )
-      elmts_child.append( elmt_child )
-
-      str_tag = child.tag.replace( f'{{{self.ns[None]}}}', '' )
-      if str_tag not in self.info:
-        self.info[str_tag] = info_child
-      else:
-        if not isinstance( self.info[str_tag], list ):
-          self.info[str_tag] = [ self.info[str_tag] ]
-        self.info[str_tag].append( info_child )
 
   def find_short_name_path_root( self ):
     if self.short_name_path is not None:
@@ -187,17 +101,14 @@ class ARXML_ELMT():
 
 #region ARXML_DOC()
 class ARXML_DOC():
-  # Loads an ARXML document and builds its recursive element information tree.
+  # Loads an ARXML document and builds its recursive element wrapper tree.
   def __init__( self, path ):
     self.doc = etree.parse( path )  # get file and convert to tree
     self.elmt_root = self.doc.getroot() # get root xml tag -> output e. g. {http://autosar.org/schema/r4.0}AUTOSAR
-    self.ns = self.elmt_root.nsmap  # save {namespace(ns)} info
-    self.info = dict()
+    self.ns = self.elmt_root.nsmap  # save {namespace(ns)}
 
-    self.root = ARXML_ELMT( self.elmt_root, self.ns, self.info, None )
+    self.root = ARXML_ELMT( self.elmt_root, self.ns, None )
     self.short_name_path_root = self.root.find_short_name_path_root()
-    # print( json.dumps( self.info, indent = 2 ) )
-    # print( self.info )
 #endregion
 
 # Returns the SHORT-NAME value stored in an ARXML element wrapper.
@@ -207,8 +118,8 @@ def get_arxml_elmt_short_name( arxml_elmt ):
   return arxml_elmt.short_name_path.short_name
 
 
-# Returns a simple val field for the requested info key.
-def get_arxml_elmt_info_value( arxml_elmt, key ):
+# Returns direct child text for the requested XML key.
+def get_arxml_elmt_value( arxml_elmt, key ):
   if key == 'SHORT-NAME':
     return get_arxml_elmt_short_name( arxml_elmt )
   if key == 'DEFINITION-REF':
@@ -220,7 +131,7 @@ def get_arxml_elmt_info_value( arxml_elmt, key ):
   return elmt_value.text
 
 
-# Yields all child parser objects referenced by the current info node.
+# Yields all child element wrappers referenced by the current node.
 def iter_arxml_elmt_children( arxml_elmt ):
   yield from arxml_elmt.elmts_sub
 
@@ -270,7 +181,7 @@ def on_arxml_elmt_selected( arxml_elmt ):
 
 # Resolves and displays the Spec definition referenced by a configuration element.
 def st_display_arxml_elmt_spec( arxml_doc_spec, arxml_elmt_cfg ):
-  definition_ref = get_arxml_elmt_info_value( arxml_elmt_cfg, 'DEFINITION-REF' )
+  definition_ref = get_arxml_elmt_value( arxml_elmt_cfg, 'DEFINITION-REF' )
   if definition_ref is None:
     with st.expander( 'None - PARAMETER-VALUES' ):
       st.info( '선택된 항목에 DEFINITION-REF가 없습니다.' )
@@ -328,7 +239,7 @@ def format_dcm_parameter_value( value, parameter_type, original_text ):
 
 # Renders DCM parameter values with one widget selected from each AUTOSAR type.
 def st_display_dcm_parameter_editor( arxml_doc_spec, arxml_elmt_cfg ):
-  definition_ref = get_arxml_elmt_info_value( arxml_elmt_cfg, 'DEFINITION-REF' )
+  definition_ref = get_arxml_elmt_value( arxml_elmt_cfg, 'DEFINITION-REF' )
   if definition_ref is None or not definition_ref.startswith( '/AUTRON/Dcm/' ):
     with st.expander( 'Not Available - PARAMETER-VALUES' ):
       st.info( '컨테이너를 선택하면 파라미터 편집기가 표시됩니다.' )
@@ -545,17 +456,6 @@ if 'arxml_doc_cfg' not in st.session_state:
   st.session_state.arxml_doc_cfg = ARXML_DOC( path_arxml_cfg )
 if 'arxml_elmt_selected' not in st.session_state:
   st.session_state.arxml_elmt_selected = None
-
-#region !<<UNUSE>>! FOR_DEBUG_TREE
-# path_info_log = os.path.join( os.path.dirname( os.path.abspath( __file__ ) ), 'arxml_info_log.txt' )
-# save_info_log(
-#   path_info_log,
-#   [
-#     { 'name': path_arxml_cfg_spec, 'info': st.session_state.arxml_doc_cfg_spec.info },
-#     { 'name': path_arxml_cfg,      'info': st.session_state.arxml_doc_cfg.info      },
-#   ]
-# )
-#endregion
 
 st.markdown(
   """
