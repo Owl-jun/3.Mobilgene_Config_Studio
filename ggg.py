@@ -99,7 +99,7 @@ class ARXML_Short_Name_Path():
         for child in self.children:
           short_name_path = child.find( list_short_name[0] )
           if short_name_path:
-            return child.find( list_short_name[0] )
+            return short_name_path #child.find( list_short_name[0] )
       else:
         return self
     return None
@@ -266,22 +266,24 @@ def get_dcm_number_limits( arxml_doc_spec, definition_ref, parameter_type ):
 #region FRONT_FUNCTIONS
 # Stores the selected configuration element in the Streamlit session state.
 def on_arxml_elmt_selected( arxml_elmt ):
-  st.session_state.selectd = arxml_elmt
+  st.session_state.arxml_elmt_selected = arxml_elmt
 
 # Resolves and displays the Spec definition referenced by a configuration element.
 def st_display_arxml_elmt_spec( arxml_doc_spec, arxml_elmt_cfg ):
   definition_ref = get_arxml_elmt_info_value( arxml_elmt_cfg, 'DEFINITION-REF' )
   if definition_ref is None:
-    st.info( '선택된 항목에 DEFINITION-REF가 없습니다.' )
+    with st.expander( 'None - PARAMETER-VALUES' ):
+      st.info( '선택된 항목에 DEFINITION-REF가 없습니다.' )
     return
 
   arxml_elmt_spec = find_arxml_elmt_by_short_name_path( arxml_doc_spec.root, definition_ref )
   if arxml_elmt_spec is None:
-    st.warning( 'Spec에서 DEFINITION-REF를 찾을 수 없습니다: {}'.format( definition_ref ) )
+    with st.expander( definition_ref + ' - PARAMETER-VALUES', expanded = True ):
+      st.warning( 'Spec에서 DEFINITION-REF를 찾을 수 없습니다: {}'.format( definition_ref ) )
     return
 
   if is_arxml_module_configuration( arxml_elmt_cfg ):
-    with st.expander( 'DEFINITION-REF : ' + definition_ref, expanded = True ):
+    with st.expander( 'DEFINITION-REF : ' + definition_ref ):
       elmt_desc = arxml_elmt_spec.elmt.find( 'DESC/L-2', arxml_elmt_spec.ns )
       if elmt_desc is None:
         st.info( 'Spec에 DESC 정보가 없습니다.' )
@@ -289,7 +291,7 @@ def st_display_arxml_elmt_spec( arxml_doc_spec, arxml_elmt_cfg ):
         st.write( ''.join( elmt_desc.itertext() ).strip() )
     return
 
-  with st.expander( 'DEFINITION-REF : ' + definition_ref, expanded = True ):
+  with st.expander( 'DEFINITION-REF : ' + definition_ref, expanded = False ):
     elmt_disp = copy.deepcopy( arxml_elmt_spec.elmt )
     elmt_sub = elmt_disp.find( 'SUB-CONTAINERS', arxml_elmt_spec.ns )
     if elmt_sub is not None:
@@ -298,7 +300,7 @@ def st_display_arxml_elmt_spec( arxml_doc_spec, arxml_elmt_cfg ):
     st.code( etree.tostring( elmt_disp, encoding = 'unicode' ), language = 'xml' )
 
 
-# Converts an AUTOSAR numerical VALUE into the Python type used by data_editor.
+# Converts an AUTOSAR parameter VALUE into the Python type used by its widget.
 def parse_dcm_parameter_value( value_text, parameter_type ):
   if parameter_type == 'boolean':
     return value_text.strip().lower() in [ '1', 'true' ]
@@ -324,22 +326,24 @@ def format_dcm_parameter_value( value, parameter_type, original_text ):
   return str( value )
 
 
-# Renders DCM parameter values with a column widget selected from each AUTOSAR type.
+# Renders DCM parameter values with one widget selected from each AUTOSAR type.
 def st_display_dcm_parameter_editor( arxml_doc_spec, arxml_elmt_cfg ):
   definition_ref = get_arxml_elmt_info_value( arxml_elmt_cfg, 'DEFINITION-REF' )
   if definition_ref is None or not definition_ref.startswith( '/AUTRON/Dcm/' ):
-    st.info( 'DCM 컨테이너를 선택하면 파라미터 편집기가 표시됩니다.' )
+    with st.expander( 'Not Available - PARAMETER-VALUES' ):
+      st.info( '컨테이너를 선택하면 파라미터 편집기가 표시됩니다.' )
     return
 
   elmt_parameter_values = arxml_elmt_cfg.elmt.find( 'PARAMETER-VALUES', arxml_elmt_cfg.ns )
   if elmt_parameter_values is None:
-    st.info( '선택한 DCM 컨테이너에 파라미터 값이 없습니다.' )
+    with st.expander( definition_ref + ' - PARAMETER-VALUES' ):
+      st.info( '선택한 컨테이너에 파라미터 값이 없습니다.' )
     return
 
-  editor_values = {}
-  column_config = {}
-  parameter_by_column = {}
-  parameter_definition_by_column = {}
+  parameter_values = {}
+  widget_config = {}
+  parameter_by_widget = {}
+  parameter_definition_by_widget = {}
   parameter_definition_refs = set()
 
   for elmt_parameter in elmt_parameter_values:
@@ -364,14 +368,14 @@ def st_display_dcm_parameter_editor( arxml_doc_spec, arxml_elmt_cfg ):
     else:
       continue
 
-    column_name = parameter_name
+    widget_name = parameter_name
     suffix = 2
-    while column_name in editor_values:
-      column_name = '{} ({})'.format( parameter_name, suffix )
+    while widget_name in parameter_values:
+      widget_name = '{} ({})'.format( parameter_name, suffix )
       suffix += 1
 
     try:
-      editor_values[column_name] = parse_dcm_parameter_value( elmt_value.text, parameter_type )
+      parameter_values[widget_name] = parse_dcm_parameter_value( elmt_value.text, parameter_type )
     except ValueError:
       continue
 
@@ -383,12 +387,12 @@ def st_display_dcm_parameter_editor( arxml_doc_spec, arxml_elmt_cfg ):
         help_text = ''.join( elmt_desc.itertext() ).strip()
 
     if parameter_type == 'boolean':
-      column_config[column_name] = {
+      widget_config[widget_name] = {
         'label': parameter_name,
         'help': help_text,
       }
     elif parameter_type == 'function':
-      column_config[column_name] = {
+      widget_config[widget_name] = {
         'label': parameter_name,
         'help': help_text,
       }
@@ -398,7 +402,7 @@ def st_display_dcm_parameter_editor( arxml_doc_spec, arxml_elmt_cfg ):
         parameter_definition_ref,
         parameter_type,
       )
-      column_config[column_name] = {
+      widget_config[widget_name] = {
         'label': parameter_name,
         'help': help_text,
         'min_value': min_value,
@@ -407,7 +411,7 @@ def st_display_dcm_parameter_editor( arxml_doc_spec, arxml_elmt_cfg ):
         'format': '%d' if parameter_type == 'integer' else None,
       }
 
-    parameter_by_column[column_name] = ( elmt_value, parameter_type, elmt_value.text )
+    parameter_by_widget[widget_name] = ( elmt_value, parameter_type, elmt_value.text )
 
   arxml_elmt_spec = find_arxml_elmt_by_short_name_path( arxml_doc_spec.root, definition_ref )
   if arxml_elmt_spec is not None:
@@ -423,10 +427,10 @@ def st_display_dcm_parameter_editor( arxml_doc_spec, arxml_elmt_cfg ):
         if parameter_definition_ref in parameter_definition_refs:
           continue
 
-        column_name = parameter_name
+        widget_name = parameter_name
         suffix = 2
-        while column_name in editor_values:
-          column_name = '{} ({})'.format( parameter_name, suffix )
+        while widget_name in parameter_values:
+          widget_name = '{} ({})'.format( parameter_name, suffix )
           suffix += 1
 
         elmt_desc = elmt_function.find( 'DESC/L-2', arxml_elmt_spec.ns )
@@ -434,62 +438,63 @@ def st_display_dcm_parameter_editor( arxml_doc_spec, arxml_elmt_cfg ):
         if elmt_desc is not None:
           help_text = ''.join( elmt_desc.itertext() ).strip()
 
-        editor_values[column_name] = ''
-        column_config[column_name] = {
+        parameter_values[widget_name] = ''
+        widget_config[widget_name] = {
           'label': parameter_name,
           'help': help_text,
         }
-        parameter_by_column[column_name] = ( None, 'function', '' )
-        parameter_definition_by_column[column_name] = parameter_definition_ref
+        parameter_by_widget[widget_name] = ( None, 'function', '' )
+        parameter_definition_by_widget[widget_name] = parameter_definition_ref
 
-  if not editor_values:
-    st.info( '편집 가능한 DCM 파라미터가 없습니다.' )
+  if not parameter_values:
+    st.info( definition_ref + ' - 편집 가능한 파라미터가 없습니다.' )
     return
 
-  for column_name, ( elmt_value, parameter_type, original_text ) in parameter_by_column.items():
-    widget_key = 'dcm_parameter_editor:{}:{}'.format(
-      arxml_elmt_cfg.elmt.getroottree().getpath( arxml_elmt_cfg.elmt ),
-      column_name,
-    )
-    if parameter_type == 'boolean':
-      edited_value = st.checkbox(
-        column_config[column_name]['label'],
-        value = editor_values[column_name],
-        help = column_config[column_name]['help'],
-        key = widget_key,
+  with st.expander( definition_ref + ' - PARAMETER-VALUES', expanded = True ):
+    for widget_name, ( elmt_value, parameter_type, original_text ) in parameter_by_widget.items():
+      widget_key = 'dcm_parameter_widget:{}:{}'.format(
+        arxml_elmt_cfg.elmt.getroottree().getpath( arxml_elmt_cfg.elmt ),
+        widget_name,
       )
-    elif parameter_type == 'function':
-      edited_value = st.text_input(
-        column_config[column_name]['label'],
-        value = editor_values[column_name],
-        help = column_config[column_name]['help'],
-        key = widget_key,
-      )
-    else:
-      edited_value = st.number_input(
-        column_config[column_name]['label'],
-        value = editor_values[column_name],
-        min_value = column_config[column_name]['min_value'],
-        max_value = column_config[column_name]['max_value'],
-        step = column_config[column_name]['step'],
-        format = column_config[column_name]['format'],
-        help = column_config[column_name]['help'],
-        key = widget_key,
-      )
+      if parameter_type == 'boolean':
+        edited_value = st.checkbox(
+          widget_config[widget_name]['label'],
+          value = parameter_values[widget_name],
+          help = widget_config[widget_name]['help'],
+          key = widget_key,
+        )
+      elif parameter_type == 'function':
+        edited_value = st.text_input(
+          widget_config[widget_name]['label'],
+          value = parameter_values[widget_name],
+          help = widget_config[widget_name]['help'],
+          key = widget_key,
+        )
+      else:
+        edited_value = st.number_input(
+          widget_config[widget_name]['label'],
+          value = parameter_values[widget_name],
+          min_value = widget_config[widget_name]['min_value'],
+          max_value = widget_config[widget_name]['max_value'],
+          step = widget_config[widget_name]['step'],
+          format = widget_config[widget_name]['format'],
+          help = widget_config[widget_name]['help'],
+          key = widget_key,
+        )
 
-    if elmt_value is not None:
-      elmt_value.text = format_dcm_parameter_value( edited_value, parameter_type, original_text )
-    elif str( edited_value ):
-      namespace = '{{{}}}'.format( arxml_elmt_cfg.ns[None] )
-      elmt_parameter = etree.SubElement(
-        elmt_parameter_values,
-        namespace + 'ECUC-TEXTUAL-PARAM-VALUE',
-      )
-      elmt_definition_ref = etree.SubElement( elmt_parameter, namespace + 'DEFINITION-REF' )
-      elmt_definition_ref.set( 'DEST', 'ECUC-FUNCTION-NAME-DEF' )
-      elmt_definition_ref.text = parameter_definition_by_column[column_name]
-      elmt_value = etree.SubElement( elmt_parameter, namespace + 'VALUE' )
-      elmt_value.text = str( edited_value )
+      if elmt_value is not None:
+        elmt_value.text = format_dcm_parameter_value( edited_value, parameter_type, original_text )
+      elif str( edited_value ):
+        namespace = '{{{}}}'.format( arxml_elmt_cfg.ns[None] )
+        elmt_parameter = etree.SubElement(
+          elmt_parameter_values,
+          namespace + 'ECUC-TEXTUAL-PARAM-VALUE',
+        )
+        elmt_definition_ref = etree.SubElement( elmt_parameter, namespace + 'DEFINITION-REF' )
+        elmt_definition_ref.set( 'DEST', 'ECUC-FUNCTION-NAME-DEF' )
+        elmt_definition_ref.text = parameter_definition_by_widget[widget_name]
+        elmt_value = etree.SubElement( elmt_parameter, namespace + 'VALUE' )
+        elmt_value.text = str( edited_value )
 
 
 # Recursively renders all referenced child elements in the current Streamlit container.
@@ -538,8 +543,8 @@ if 'arxml_doc_cfg_spec' not in st.session_state:
   st.session_state.arxml_doc_cfg_spec = ARXML_DOC( path_arxml_cfg_spec )
 if 'arxml_doc_cfg' not in st.session_state:
   st.session_state.arxml_doc_cfg = ARXML_DOC( path_arxml_cfg )
-if 'selectd' not in st.session_state:
-  st.session_state.selectd = None
+if 'arxml_elmt_selected' not in st.session_state:
+  st.session_state.arxml_elmt_selected = None
 
 #region !<<UNUSE>>! FOR_DEBUG_TREE
 # path_info_log = os.path.join( os.path.dirname( os.path.abspath( __file__ ) ), 'arxml_info_log.txt' )
@@ -594,17 +599,9 @@ with view_left:
     st_display_arxml_elmt_tree( st.session_state.arxml_doc_cfg.root )
 
 with view_right:
-  with st.container( border = True, height = 390 ):
-    if st.session_state.selectd is not None:
-      st_display_arxml_elmt_spec( st.session_state.arxml_doc_cfg_spec, st.session_state.selectd )
+  with st.container( border = True, height = 800 ):
+    if st.session_state.arxml_elmt_selected is not None:
+      st_display_arxml_elmt_spec( st.session_state.arxml_doc_cfg_spec, st.session_state.arxml_elmt_selected )
+      st_display_dcm_parameter_editor( st.session_state.arxml_doc_cfg_spec, st.session_state.arxml_elmt_selected )
     else:
-      st.info( 'DEFINITION-REF' )
-
-  with st.container( border = True, height = 390 ):
-    if st.session_state.selectd is not None:
-      st_display_dcm_parameter_editor(
-        st.session_state.arxml_doc_cfg_spec,
-        st.session_state.selectd,
-      )
-    else:
-      st.info( 'DCM 컨테이너를 선택하면 파라미터 편집기가 표시됩니다.' )
+      st.info( '좌측 컨테이너를 선택하세요.' )
