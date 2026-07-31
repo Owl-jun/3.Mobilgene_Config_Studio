@@ -4,7 +4,7 @@ import copy
 import streamlit as st
 #endregion
 
-#region BACK_FUNCTIONS
+#region BACK_SIDES
 
 #region ARXML_Short_Name_Path()
 class ARXML_Short_Name_Path():
@@ -131,6 +131,31 @@ def get_arxml_elmt_value( arxml_elmt, key ):
   return elmt_value.text
 
 
+# Converts one lxml subtree to a temporary dict for JSON display.
+def convert_arxml_elmt_to_dict( elmt ):
+  info = {}
+
+  if elmt.text and elmt.text.strip():
+    info['#text'] = elmt.text.strip()
+  if elmt.attrib:
+    info['@attributes'] = dict( elmt.attrib )
+
+  for elmt_child in elmt:
+    if elmt_child.tag is etree.Comment:
+      continue
+
+    tag_child = etree.QName( elmt_child ).localname
+    info_child = convert_arxml_elmt_to_dict( elmt_child )
+    if tag_child not in info:
+      info[tag_child] = info_child
+    elif isinstance( info[tag_child], list ):
+      info[tag_child].append( info_child )
+    else:
+      info[tag_child] = [ info[tag_child], info_child ]
+
+  return info
+
+
 # Yields all child element wrappers referenced by the current node.
 def iter_arxml_elmt_children( arxml_elmt ):
   yield from arxml_elmt.elmts_sub
@@ -172,9 +197,9 @@ def get_dcm_number_limits( arxml_doc_spec, definition_ref, parameter_type ):
     except ( AttributeError, TypeError, ValueError ):
       values.append( None )
   return values[0], values[1]
-#endregion BACK_FUNCTIONS
+#endregion BACK_SIDES
 
-#region FRONT_FUNCTIONS
+#region FRONT_SIDES
 # Stores the selected configuration element in the Streamlit session state.
 def on_arxml_elmt_selected( arxml_elmt ):
   st.session_state.arxml_elmt_selected = arxml_elmt
@@ -240,6 +265,40 @@ def format_dcm_parameter_value( value, parameter_type, original_text ):
 # Renders DCM parameter values with one widget selected from each AUTOSAR type.
 def st_display_dcm_parameter_editor( arxml_doc_spec, arxml_elmt_cfg ):
   definition_ref = get_arxml_elmt_value( arxml_elmt_cfg, 'DEFINITION-REF' )
+  expander_label = definition_ref + ' - ECUC-REFERENCE-DEF' if definition_ref else 'Not Available - ECUC-REFERENCE-DEF'
+  with st.expander( expander_label ):
+    if definition_ref is None:
+      st.info( '선택된 항목에 DEFINITION-REF가 없습니다.' )
+    else:
+      arxml_elmt_spec = find_arxml_elmt_by_short_name_path( arxml_doc_spec.root, definition_ref )
+      if arxml_elmt_spec is None:
+        st.warning( 'Spec에서 DEFINITION-REF를 찾을 수 없습니다: {}'.format( definition_ref ) )
+      else:
+        elmt_references = arxml_elmt_spec.elmt.find( 'REFERENCES', arxml_elmt_spec.ns )
+        if elmt_references is None:
+          st.info( 'Spec에 ECUC-REFERENCE-DEF가 없습니다.' )
+        else:
+          st.json( convert_arxml_elmt_to_dict( elmt_references ), expanded = 1 )
+          elmts_reference_def = elmt_references.findall( 'ECUC-REFERENCE-DEF', arxml_elmt_spec.ns )
+          if not elmts_reference_def:
+            st.info( 'Spec에 ECUC-REFERENCE-DEF가 없습니다.' )
+          for elmt_reference_def in elmts_reference_def:
+            elmt_short_name = elmt_reference_def.find( 'SHORT-NAME', arxml_elmt_spec.ns )
+            if elmt_short_name is None:
+              continue
+
+            elmt_desc = elmt_reference_def.find( 'DESC/L-2', arxml_elmt_spec.ns )
+            help_text = None
+            if elmt_desc is not None:
+              help_text = ''.join( elmt_desc.itertext() ).strip()
+
+            st.button(
+              elmt_short_name.text,
+              type = 'tertiary',
+              help = help_text,
+              key = definition_ref + '/REFERENCES/' + elmt_short_name.text,
+            )
+
   if definition_ref is None or not definition_ref.startswith( '/AUTRON/Dcm/' ):
     with st.expander( 'Not Available - PARAMETER-VALUES' ):
       st.info( '컨테이너를 선택하면 파라미터 편집기가 표시됩니다.' )
@@ -445,8 +504,10 @@ def st_display_arxml_elmt_tree( arxml_elmt, parent_path = '', display_module_tre
       )
   else:
     st_display_arxml_elmt_children( arxml_elmt, current_path, display_module_tree )
-#endregion FRONT_FUNCTIONS
+#endregion FRONT_SIDES
 
+# =======================================================================
+# Path & Session Config
 path_arxml_cfg_spec = 'AUTRON_AUTOSAR_Dcm_ECU_Configuration_PDF.arxml'
 path_arxml_cfg = 'Ecud_Dcm.arxml'
 
@@ -456,6 +517,7 @@ if 'arxml_doc_cfg' not in st.session_state:
   st.session_state.arxml_doc_cfg = ARXML_DOC( path_arxml_cfg )
 if 'arxml_elmt_selected' not in st.session_state:
   st.session_state.arxml_elmt_selected = None
+# =======================================================================
 
 st.markdown(
   """
