@@ -1,6 +1,8 @@
 #region INCLUDES
 from lxml import etree
 import copy
+import os
+import shutil
 import streamlit as st
 #endregion
 
@@ -103,12 +105,41 @@ class ARXML_ELMT():
 class ARXML_DOC():
   # Loads an ARXML document and builds its recursive element wrapper tree.
   def __init__( self, path ):
+    self.path = path
     self.doc = etree.parse( path )  # get file and convert to tree
     self.elmt_root = self.doc.getroot() # get root xml tag -> output e. g. {http://autosar.org/schema/r4.0}AUTOSAR
     self.ns = self.elmt_root.nsmap  # save {namespace(ns)}
 
     self.root = ARXML_ELMT( self.elmt_root, self.ns, None )
     self.short_name_path_root = self.root.find_short_name_path_root()
+
+  def save( self, path = None ):
+    path_save = path if path is not None else self.path
+    path_temp = path_save + '.tmp'
+    path_backup = path_save + '.bak'
+    path_backup_temp = path_backup + '.tmp'
+    encoding = self.doc.docinfo.encoding or 'UTF-8'
+
+    try:
+      self.doc.write(
+        path_temp,
+        encoding = encoding,
+        xml_declaration = True,
+        pretty_print = False,
+      )
+
+      if os.path.exists( path_save ):
+        shutil.copy2( path_save, path_backup_temp )
+        os.replace( path_backup_temp, path_backup )
+
+      os.replace( path_temp, path_save )
+    finally:
+      if os.path.exists( path_temp ):
+        os.remove( path_temp )
+      if os.path.exists( path_backup_temp ):
+        os.remove( path_backup_temp )
+
+    return os.path.abspath( path_save )
 #endregion
 
 # Returns the SHORT-NAME value stored in an ARXML element wrapper.
@@ -453,18 +484,40 @@ def st_display_dcm_parameter_editor( arxml_doc_spec, arxml_elmt_cfg ):
         )
 
       if elmt_value is not None:
-        elmt_value.text = format_dcm_parameter_value( edited_value, parameter_type, original_text )
+        if edited_value != parameter_values[widget_name]:
+          elmt_value.text = format_dcm_parameter_value( edited_value, parameter_type, original_text )
+          st.session_state.arxml_cfg_dirty = True
       elif str( edited_value ):
         namespace = '{{{}}}'.format( arxml_elmt_cfg.ns[None] )
         elmt_parameter = etree.SubElement(
           elmt_parameter_values,
           namespace + 'ECUC-TEXTUAL-PARAM-VALUE',
         )
+        elmt_parameter_previous = elmt_parameter.getprevious()
+        str_indent_parameter = elmt_parameter_values.text
+        if str_indent_parameter is None:
+          str_indent_parameter = ( elmt_parameter_values.tail or '\n' ) + '  '
+          elmt_parameter_values.text = str_indent_parameter
+
+        if elmt_parameter_previous is not None:
+          str_indent_parameter_end = elmt_parameter_previous.tail
+          elmt_parameter_previous.tail = str_indent_parameter
+        else:
+          str_indent_parameter_end = str_indent_parameter[:-2]
+
+        str_indent_value = str_indent_parameter + '  '
+
+        elmt_parameter.text = str_indent_value
+        elmt_parameter.tail = str_indent_parameter_end
+
         elmt_definition_ref = etree.SubElement( elmt_parameter, namespace + 'DEFINITION-REF' )
         elmt_definition_ref.set( 'DEST', 'ECUC-FUNCTION-NAME-DEF' )
         elmt_definition_ref.text = parameter_definition_by_widget[widget_name]
+        elmt_definition_ref.tail = str_indent_value
         elmt_value = etree.SubElement( elmt_parameter, namespace + 'VALUE' )
         elmt_value.text = str( edited_value )
+        elmt_value.tail = str_indent_parameter
+        st.session_state.arxml_cfg_dirty = True
 
 
 # Recursively renders all referenced child elements in the current Streamlit container.
@@ -517,6 +570,8 @@ if 'arxml_doc_cfg' not in st.session_state:
   st.session_state.arxml_doc_cfg = ARXML_DOC( path_arxml_cfg )
 if 'arxml_elmt_selected' not in st.session_state:
   st.session_state.arxml_elmt_selected = None
+if 'arxml_cfg_dirty' not in st.session_state:
+  st.session_state.arxml_cfg_dirty = False
 # =======================================================================
 
 st.markdown(
@@ -565,5 +620,19 @@ with view_right:
     if st.session_state.arxml_elmt_selected is not None:
       st_display_arxml_elmt_spec( st.session_state.arxml_doc_cfg_spec, st.session_state.arxml_elmt_selected )
       st_display_dcm_parameter_editor( st.session_state.arxml_doc_cfg_spec, st.session_state.arxml_elmt_selected )
+      if st.button(
+        'Save',
+        type = 'primary',
+        disabled = not st.session_state.arxml_cfg_dirty,
+        key = 'save_arxml_cfg',
+      ):
+        try:
+          path_saved = st.session_state.arxml_doc_cfg.save()
+          st.session_state.arxml_cfg_dirty = False
+          st.success( '저장 완료: {}'.format( path_saved ) )
+        except ( OSError, etree.LxmlError ) as error:
+          st.error( '저장 실패: {}'.format( error ) )
+
+      st.caption( '수정됨' if st.session_state.arxml_cfg_dirty else '저장됨' )
     else:
       st.info( '좌측 컨테이너를 선택하세요.' )
