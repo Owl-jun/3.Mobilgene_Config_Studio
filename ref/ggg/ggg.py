@@ -3,6 +3,7 @@ import os
 
 import json
 import copy
+import shutil
 
 import streamlit as st
 
@@ -138,6 +139,7 @@ class ARXML_ELMT():
 
 class ARXML_DOC():
   def __init__( self, path ):
+    self.path = path
     self.doc = etree.parse( path )
     self.elmt_root = self.doc.getroot()
     self.ns = self.elmt_root.nsmap
@@ -148,10 +150,72 @@ class ARXML_DOC():
     # print( json.dumps( self.info, indent = 2 ) )
     # print( self.info )
 
+  def normalize_integer_values( self ):
+    elmts_definition_ref = self.elmt_root.xpath(
+      './/ns:DEFINITION-REF[@DEST="ECUC-INTEGER-PARAM-DEF"]',
+      namespaces = { 'ns': self.ns[None] },
+    )
+
+    for elmt_definition_ref in elmts_definition_ref:
+      elmt_value = elmt_definition_ref.getparent().find( 'VALUE', self.ns )
+      if elmt_value is None or elmt_value.text is None:
+        continue
+
+      try:
+        elmt_value.text = format_parameter_value(
+          elmt_value.text,
+          'integer',
+          elmt_value.text,
+        )
+      except ValueError:
+        continue
+
+  def save( self, path = None ):
+    path_save = path if path is not None else self.path
+    path_temp = path_save + '.tmp'
+    path_backup = path_save + '.bak'
+    path_backup_temp = path_backup + '.tmp'
+    encoding = self.doc.docinfo.encoding or 'UTF-8'
+
+    try:
+      self.normalize_integer_values()
+      self.doc.write(
+        path_temp,
+        encoding = encoding,
+        xml_declaration = True,
+        pretty_print = False,
+      )
+
+      if os.path.exists( path_save ):
+        shutil.copy2( path_save, path_backup_temp )
+        os.replace( path_backup_temp, path_backup )
+
+      os.replace( path_temp, path_save )
+    finally:
+      if os.path.exists( path_temp ):
+        os.remove( path_temp )
+      if os.path.exists( path_backup_temp ):
+        os.remove( path_backup_temp )
+
+    return os.path.abspath( path_save )
+
 
 
 def st_on_expander_change( short_name_path ):
   st.session_state.short_name_path_selected = short_name_path
+
+def rollback_arxml_doc_cfg():
+  short_name_path_selected = st.session_state.short_name_path_selected.absolute_path()
+  path_arxml_cfg = st.session_state.arxml_doc_cfg.path
+  st.session_state.arxml_doc_cfg = ARXML_DOC( path_arxml_cfg )
+  st.session_state.short_name_path_selected = st.session_state.arxml_doc_cfg.short_name_path_root.find(
+    short_name_path_selected,
+  )
+  st.session_state.arxml_cfg_dirty = False
+
+  for key in list( st.session_state.keys() ):
+    if key.startswith( 'parameter_widget:' ):
+      del st.session_state[key]
 
 def st_display_short_name_path_tree( short_name_path ):
   if short_name_path.short_name is None:
@@ -197,6 +261,115 @@ def st_display_short_name_path_ref( short_name_path, arxml_doc_cfg_spec ):
           etree.indent( elmt_disp, space = '  ' )
           st.code( etree.tostring( elmt_disp, encoding = 'unicode' ), language = 'xml' )
 
+
+def get_info_text( info, key ):
+  if key not in info:
+    return None
+
+  value = info[key]
+  if isinstance( value, list ):
+    value = value[0]
+  if isinstance( value, dict ):
+    return value.get( '#text' )
+  return str( value )
+
+
+def get_param_help( param ):
+  desc = param.get( 'DESC' )
+  if isinstance( desc, list ):
+    desc = desc[0]
+  if not isinstance( desc, dict ):
+    return None
+
+  value = desc.get( 'L-2' )
+  if isinstance( value, list ):
+    value = value[0]
+  if isinstance( value, dict ):
+    return value.get( '#text' )
+  return None
+
+
+def parse_parameter_value( value, parameter_type ):
+  if parameter_type == 'boolean':
+    return value.strip().lower() in [ '1', 'true' ]
+  if parameter_type == 'integer':
+    return int( value, 0 )
+  if parameter_type == 'float':
+    return float( value )
+  return value
+
+
+def format_parameter_value( value, parameter_type, original_value = '' ):
+  if parameter_type == 'boolean':
+    if original_value.strip().lower() in [ '0', '1' ]:
+      return '1' if value else '0'
+    return 'true' if value else 'false'
+  if parameter_type == 'integer':
+    integer_value = int( value, 0 ) if isinstance( value, str ) else int( value )
+    original_value = original_value.strip().lower()
+    original_value = original_value[1:] if original_value.startswith( '-' ) else original_value
+    digit_count = len( original_value[2:] ) if original_value.startswith( '0x' ) else 2
+    digit_count = max( 2, digit_count, len( '{:X}'.format( abs( integer_value ) ) ) )
+    sign = '-' if integer_value < 0 else ''
+    return '{}0x{:0{}X}'.format( sign, abs( integer_value ), digit_count )
+  if parameter_type == 'float':
+    return str( float( value ) )
+  return str( value )
+
+
+def find_parameter_value( short_name_path, definition_ref ):
+  elmt_parameter_values = short_name_path.elmt.elmt.find(
+    'PARAMETER-VALUES',
+    short_name_path.elmt.ns,
+  )
+  if elmt_parameter_values is None:
+    return None, None
+
+  for elmt_parameter in elmt_parameter_values:
+    elmt_definition_ref = elmt_parameter.find( 'DEFINITION-REF', short_name_path.elmt.ns )
+    if elmt_definition_ref is not None and elmt_definition_ref.text == definition_ref:
+      return elmt_parameter_values, elmt_parameter.find( 'VALUE', short_name_path.elmt.ns )
+
+  return elmt_parameter_values, None
+
+
+def append_parameter_value( elmt_parameter_values, ns, definition_ref, parameter_type, value ):
+  namespace = '{{{}}}'.format( ns[None] )
+  str_tag = 'ECUC-TEXTUAL-PARAM-VALUE' if parameter_type == 'function' else 'ECUC-NUMERICAL-PARAM-VALUE'
+  str_dest = {
+    'boolean': 'ECUC-BOOLEAN-PARAM-DEF',
+    'integer': 'ECUC-INTEGER-PARAM-DEF',
+    'float': 'ECUC-FLOAT-PARAM-DEF',
+    'function': 'ECUC-FUNCTION-NAME-DEF',
+  }[parameter_type]
+
+  elmt_parameter = etree.SubElement( elmt_parameter_values, namespace + str_tag )
+  elmt_parameter_previous = elmt_parameter.getprevious()
+  str_indent_parameter = elmt_parameter_values.text
+  if str_indent_parameter is None:
+    str_indent_parameter = ( elmt_parameter_values.tail or '\n' ) + '  '
+    elmt_parameter_values.text = str_indent_parameter
+
+  if elmt_parameter_previous is not None:
+    str_indent_parameter_end = elmt_parameter_previous.tail
+    elmt_parameter_previous.tail = str_indent_parameter
+  else:
+    str_indent_parameter_end = str_indent_parameter[:-2]
+
+  str_indent_value = str_indent_parameter + '  '
+  elmt_parameter.text = str_indent_value
+  elmt_parameter.tail = str_indent_parameter_end
+
+  elmt_definition_ref = etree.SubElement( elmt_parameter, namespace + 'DEFINITION-REF' )
+  elmt_definition_ref.set( 'DEST', str_dest )
+  elmt_definition_ref.text = definition_ref
+  elmt_definition_ref.tail = str_indent_value
+
+  elmt_value = etree.SubElement( elmt_parameter, namespace + 'VALUE' )
+  elmt_value.text = format_parameter_value( value, parameter_type )
+  elmt_value.tail = str_indent_parameter
+
+
 def st_display_short_name_path_params( short_name_path, arxml_doc_cfg_spec ):
   if short_name_path.elmt is not None:
     if short_name_path.elmt.str_desc_ref is not None:
@@ -206,55 +379,135 @@ def st_display_short_name_path_params( short_name_path, arxml_doc_cfg_spec ):
           if 'PARAMETERS' in short_name_path_def_ref.elmt.info:
             params = short_name_path_def_ref.elmt.info['PARAMETERS']
             st.json( params, expanded = 1 )
-            if 'ECUC-INTEGER-PARAM-DEF' in params:
-              if isinstance( params['ECUC-INTEGER-PARAM-DEF'], list ):
-                for param in params['ECUC-INTEGER-PARAM-DEF']:
-                  st.number_input(
-                    param['SHORT-NAME']["#text"],
-                    min_value = int( param['MIN']["#text"] ),
-                    max_value = int( param['MAX']["#text"] ),
-                    # value = int( param['DEFAULT-VALUE']["#text"], 0 ),
-                    help = param['DESC']['L-2']["#text"]
-                  )
-              else:
-                param = params['ECUC-INTEGER-PARAM-DEF']
-                st.number_input(
-                  param['SHORT-NAME']["#text"],
-                  min_value = int( param['MIN']["#text"] ),
-                  max_value = int( param['MAX']["#text"] ),
-                  # value = int( param['DEFAULT-VALUE']["#text"], 0 ),
-                  help = param['DESC']['L-2']["#text"]
+            parameter_types = {
+              'ECUC-BOOLEAN-PARAM-DEF': 'boolean',
+              'ECUC-INTEGER-PARAM-DEF': 'integer',
+              'ECUC-FLOAT-PARAM-DEF': 'float',
+              'ECUC-FUNCTION-NAME-DEF': 'function',
+            }
+
+            for parameter_tag, parameter_type in parameter_types.items():
+              if parameter_tag not in params:
+                continue
+
+              list_param = params[parameter_tag]
+              if not isinstance( list_param, list ):
+                list_param = [ list_param ]
+
+              for param in list_param:
+                parameter_name = get_info_text( param, 'SHORT-NAME' )
+                if parameter_name is None:
+                  continue
+
+                parameter_definition_ref = short_name_path_def_ref.absolute_path() + '/' + parameter_name
+                elmt_parameter_values, elmt_value = find_parameter_value(
+                  short_name_path,
+                  parameter_definition_ref,
                 )
-            if 'ECUC-BOOLEAN-PARAM-DEF' in params:
-              if isinstance( params['ECUC-BOOLEAN-PARAM-DEF'], list ):
-                for param in params['ECUC-BOOLEAN-PARAM-DEF']:
-                  st.checkbox(
-                    param['SHORT-NAME']["#text"],
-                    # value = int( param['DEFAULT-VALUE']["#text"], 0 ),
-                    help = param['DESC']['L-2']["#text"]
+                original_value = elmt_value.text if elmt_value is not None and elmt_value.text is not None else ''
+
+                default_value = get_info_text( param, 'DEFAULT-VALUE' )
+                if default_value is None:
+                  default_value = get_info_text( param, 'MIN' )
+                if default_value is None:
+                  default_value = 'false' if parameter_type == 'boolean' else '0'
+                if parameter_type == 'function':
+                  default_value = ''
+
+                try:
+                  value = parse_parameter_value(
+                    original_value if original_value else default_value,
+                    parameter_type,
                   )
-              else:
-                param = params['ECUC-BOOLEAN-PARAM-DEF']
-                st.checkbox(
-                  param['SHORT-NAME']["#text"],
-                  # value = int( param['DEFAULT-VALUE']["#text"], 0 ),
-                  help = param['DESC']['L-2']["#text"]
+                except ValueError:
+                  continue
+
+                widget_key = 'parameter_widget:{}:{}'.format(
+                  short_name_path.absolute_path(),
+                  parameter_definition_ref,
                 )
-            if 'ECUC-FUNCTION-NAME-DEF' in params:
-              if isinstance( params['ECUC-FUNCTION-NAME-DEF'], list ):
-                for param in params['ECUC-FUNCTION-NAME-DEF']:
-                  st.text_input(
-                    param['SHORT-NAME']["#text"],
-                    # value = int( param['DEFAULT-VALUE']["#text"], 0 ),
-                    help = param['DESC']['L-2']["#text"]
+                help_text = get_param_help( param )
+                parameter_changed = False
+
+                if parameter_type == 'boolean':
+                  edited_value = st.checkbox(
+                    parameter_name,
+                    value = value,
+                    help = help_text,
+                    key = widget_key,
                   )
-              else:
-                param = params['ECUC-FUNCTION-NAME-DEF']
-                st.text_input(
-                  param['SHORT-NAME']["#text"],
-                  # value = int( param['DEFAULT-VALUE']["#text"], 0 ),
-                  help = param['DESC']['L-2']["#text"]
-                )
+                  parameter_changed = edited_value != value
+                elif parameter_type == 'function':
+                  edited_value = st.text_input(
+                    parameter_name,
+                    value = value,
+                    help = help_text,
+                    key = widget_key,
+                  )
+                  parameter_changed = edited_value != value
+                elif parameter_type == 'integer':
+                  min_value = get_info_text( param, 'MIN' )
+                  max_value = get_info_text( param, 'MAX' )
+                  min_value = int( min_value, 0 ) if min_value is not None else None
+                  max_value = int( max_value, 0 ) if max_value is not None else None
+                  value_hex = format_parameter_value(
+                    value,
+                    parameter_type,
+                    original_value if original_value else default_value,
+                  )
+                  edited_value_hex = st.text_input(
+                    parameter_name,
+                    value = value_hex,
+                    help = help_text,
+                    key = widget_key,
+                  )
+
+                  try:
+                    if not edited_value_hex.strip().lower().startswith( ( '0x', '-0x' ) ):
+                      raise ValueError
+                    edited_value = int( edited_value_hex, 0 )
+                    if min_value is not None and edited_value < min_value:
+                      raise ValueError
+                    if max_value is not None and edited_value > max_value:
+                      raise ValueError
+                    parameter_changed = edited_value_hex != value_hex
+                  except ValueError:
+                    st.warning( '{} 값은 0x00 형식과 Spec 범위 안에서 입력하세요.'.format( parameter_name ) )
+                    edited_value = value
+                else:
+                  min_value = get_info_text( param, 'MIN' )
+                  max_value = get_info_text( param, 'MAX' )
+                  min_value = float( min_value ) if min_value is not None else None
+                  max_value = float( max_value ) if max_value is not None else None
+
+                  edited_value = st.number_input(
+                    parameter_name,
+                    value = value,
+                    min_value = min_value,
+                    max_value = max_value,
+                    help = help_text,
+                    key = widget_key,
+                  )
+                  parameter_changed = edited_value != value
+
+                if elmt_value is not None:
+                  if parameter_changed:
+                    elmt_value.text = format_parameter_value(
+                      edited_value,
+                      parameter_type,
+                      original_value,
+                    )
+                    st.session_state.arxml_cfg_dirty = True
+                elif elmt_parameter_values is not None:
+                  if parameter_changed or parameter_type == 'function' and edited_value:
+                    append_parameter_value(
+                      elmt_parameter_values,
+                      short_name_path.elmt.ns,
+                      parameter_definition_ref,
+                      parameter_type,
+                      edited_value,
+                    )
+                    st.session_state.arxml_cfg_dirty = True
 
 # st.checkbox
 
@@ -296,6 +549,8 @@ if 'arxml_doc_cfg' not in st.session_state:
   st.session_state.arxml_doc_cfg = ARXML_DOC( path_arxml_cfg )
 if 'short_name_path_selected' not in st.session_state:
   st.session_state.short_name_path_selected = None
+if 'arxml_cfg_dirty' not in st.session_state:
+  st.session_state.arxml_cfg_dirty = False
 
 st.markdown(
   """
@@ -325,6 +580,15 @@ st.markdown(
     min-height: unset !important;
   }
 
+  .st-key-arxml_action_bar {
+    position: sticky;
+    top: 0;
+    z-index: 10;
+    padding: 0.35rem 0.25rem;
+    background-color: var(--background-color);
+    border-bottom: 1px solid rgba(128, 128, 128, 0.25);
+  }
+
   </style>
   """,
   unsafe_allow_html=True
@@ -341,5 +605,37 @@ with view_left:
 with view_right:
   with st.container( border = True, height = 800 ):
     if st.session_state.short_name_path_selected is not None:
+      arxml_action_bar = st.empty()
       st_display_short_name_path_ref( st.session_state.short_name_path_selected, st.session_state.arxml_doc_cfg_spec )
       st_display_short_name_path_params( st.session_state.short_name_path_selected, st.session_state.arxml_doc_cfg_spec )
+      with arxml_action_bar.container(
+        key = 'arxml_action_bar',
+        horizontal = True,
+        horizontal_alignment = 'right',
+        vertical_alignment = 'center',
+        gap = 'small',
+      ):
+        st.caption( '수정됨' if st.session_state.arxml_cfg_dirty else '저장됨' )
+
+        st.button(
+          'Rollback',
+          type = 'secondary',
+          icon = ':material/undo:',
+          disabled = not st.session_state.arxml_cfg_dirty,
+          key = 'rollback_arxml_cfg',
+          on_click = rollback_arxml_doc_cfg,
+        )
+
+        if st.button(
+          'Save',
+          type = 'primary',
+          icon = ':material/save:',
+          disabled = not st.session_state.arxml_cfg_dirty,
+          key = 'save_arxml_cfg',
+        ):
+          try:
+            path_saved = st.session_state.arxml_doc_cfg.save()
+            st.session_state.arxml_cfg_dirty = False
+            st.success( '저장 완료: {}'.format( path_saved ) )
+          except ( OSError, etree.LxmlError ) as error:
+            st.error( '저장 실패: {}'.format( error ) )
