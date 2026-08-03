@@ -450,30 +450,17 @@ def st_display_short_name_path_params( short_name_path, arxml_doc_cfg_spec ):
                   max_value = get_info_text( param, 'MAX' )
                   min_value = int( min_value, 0 ) if min_value is not None else None
                   max_value = int( max_value, 0 ) if max_value is not None else None
-                  value_hex = format_parameter_value(
-                    value,
-                    parameter_type,
-                    original_value if original_value else default_value,
-                  )
-                  edited_value_hex = st.text_input(
+                  edited_value = st.number_input(
                     parameter_name,
-                    value = value_hex,
+                    value = value,
+                    min_value = min_value,
+                    max_value = max_value,
+                    step = 1,
+                    format = '%d',
                     help = help_text,
                     key = widget_key,
                   )
-
-                  try:
-                    if not edited_value_hex.strip().lower().startswith( ( '0x', '-0x' ) ):
-                      raise ValueError
-                    edited_value = int( edited_value_hex, 0 )
-                    if min_value is not None and edited_value < min_value:
-                      raise ValueError
-                    if max_value is not None and edited_value > max_value:
-                      raise ValueError
-                    parameter_changed = edited_value_hex != value_hex
-                  except ValueError:
-                    st.warning( '{} 값은 0x00 형식과 Spec 범위 안에서 입력하세요.'.format( parameter_name ) )
-                    edited_value = value
+                  parameter_changed = edited_value != value
                 else:
                   min_value = get_info_text( param, 'MIN' )
                   max_value = get_info_text( param, 'MAX' )
