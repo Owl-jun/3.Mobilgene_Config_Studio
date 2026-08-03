@@ -1,64 +1,12 @@
-#region INCLUDES
 from lxml import etree
 import os
+
 import json
 import copy
+import shutil
+
 import streamlit as st
-#endregion
 
-#region FOR_DEBUG_TREE
-# Recursively prints the parsed info structure in a readable tree format.
-def print_info( info, indent = '', visited = None, file = None ):
-  if visited is None:
-    visited = set()
-
-  if isinstance( info, (dict, list) ):
-    info_id = id( info )
-    if info_id in visited:
-      print( '{}<already visited: {} (id={})>'.format( indent, type( info ).__name__, info_id ), file = file )
-      return
-    visited.add( info_id )
-
-  if isinstance( info, dict ):
-    if 'ref' in info and 'val' in info:
-      ref = info['ref']
-      if ref is None:
-        print( '{}ref : None'.format( indent ), file = file )
-      else:
-        print( '{}ref : {} (id={})'.format( indent, type( ref ).__name__, id( ref ) ), file = file )
-
-      val = info['val']
-      if isinstance( val, (dict, list) ):
-        print( '{}val :'.format( indent ), file = file )
-        print_info( val, indent + '  ', visited, file )
-      else:
-        print( '{}val : {!r}'.format( indent, val ), file = file )
-    else:
-      for key, value in info.items():
-        print( '{}{}'.format( indent, key ), file = file )
-        print_info( value, indent + '  ', visited, file )
-  elif isinstance( info, list ):
-    for index, value in enumerate( info ):
-      print( '{}[{}]'.format( indent, index ), file = file )
-      print_info( value, indent + '  ', visited, file )
-  else:
-    print( '{}{!r}'.format( indent, info ), file = file )
-
-
-# Writes one or more parsed info trees to a UTF-8 text log file.
-def save_info_log( path_log, list_info ):
-  with open( path_log, 'w', encoding = 'utf-8' ) as file_log:
-    for index, info_log in enumerate( list_info ):
-      if index > 0:
-        print( file = file_log )
-      print( '===== {} ====='.format( info_log['name'] ), file = file_log )
-      print_info( info_log['info'], file = file_log )
-
-#endregion
-
-#region BACK_FUNCTIONS
-
-#region ARXML_Short_Name_Path()
 class ARXML_Short_Name_Path():
   def __init__( self, short_name, elmt ):
     self.short_name = short_name
@@ -99,14 +47,15 @@ class ARXML_Short_Name_Path():
         for child in self.children:
           short_name_path = child.find( list_short_name[0] )
           if short_name_path:
-            return short_name_path #child.find( list_short_name[0] )
+            return child.find( list_short_name[0] )
       else:
         return self
     return None
-#endregion
 
-#region ARXML_ELMT()
 class ARXML_ELMT():
+  LIST_DEF_SPEC: list = [
+  ]
+
   def __init__( self, elmt: etree._Element, ns: dict, info, short_name_path_parent ):
     self.elmt = elmt
     self.ns = ns
@@ -123,6 +72,7 @@ class ARXML_ELMT():
     self.short_name_path = None
     self.str_desc_ref = None
 
+    # self.init_info()
     self.to_info()
 
   def to_info( self ):
@@ -183,379 +133,408 @@ class ARXML_ELMT():
         if short_name_path is not None:
           return short_name_path
     return None
-#endregion
 
-#region ARXML_DOC()
+
+
+
 class ARXML_DOC():
-  # Loads an ARXML document and builds its recursive element information tree.
   def __init__( self, path ):
-    self.doc = etree.parse( path )  # get file and convert to tree
-    self.elmt_root = self.doc.getroot() # get root xml tag -> output e. g. {http://autosar.org/schema/r4.0}AUTOSAR
-    self.ns = self.elmt_root.nsmap  # save {namespace(ns)} info
+    self.path = path
+    self.doc = etree.parse( path )
+    self.elmt_root = self.doc.getroot()
+    self.ns = self.elmt_root.nsmap
     self.info = dict()
 
     self.root = ARXML_ELMT( self.elmt_root, self.ns, self.info, None )
     self.short_name_path_root = self.root.find_short_name_path_root()
     # print( json.dumps( self.info, indent = 2 ) )
     # print( self.info )
-#endregion
 
-# Returns the SHORT-NAME value stored in an ARXML element wrapper.
-def get_arxml_elmt_short_name( arxml_elmt ):
-  if arxml_elmt.short_name_path is None:
+  def normalize_integer_values( self ):
+    elmts_definition_ref = self.elmt_root.xpath(
+      './/ns:DEFINITION-REF[@DEST="ECUC-INTEGER-PARAM-DEF"]',
+      namespaces = { 'ns': self.ns[None] },
+    )
+
+    for elmt_definition_ref in elmts_definition_ref:
+      elmt_value = elmt_definition_ref.getparent().find( 'VALUE', self.ns )
+      if elmt_value is None or elmt_value.text is None:
+        continue
+
+      try:
+        elmt_value.text = format_parameter_value(
+          elmt_value.text,
+          'integer',
+          elmt_value.text,
+        )
+      except ValueError:
+        continue
+
+  def save( self, path = None ):
+    path_save = path if path is not None else self.path
+    path_temp = path_save + '.tmp'
+    path_backup = path_save + '.bak'
+    path_backup_temp = path_backup + '.tmp'
+    encoding = self.doc.docinfo.encoding or 'UTF-8'
+
+    try:
+      self.normalize_integer_values()
+      self.doc.write(
+        path_temp,
+        encoding = encoding,
+        xml_declaration = True,
+        pretty_print = False,
+      )
+
+      if os.path.exists( path_save ):
+        shutil.copy2( path_save, path_backup_temp )
+        os.replace( path_backup_temp, path_backup )
+
+      os.replace( path_temp, path_save )
+    finally:
+      if os.path.exists( path_temp ):
+        os.remove( path_temp )
+      if os.path.exists( path_backup_temp ):
+        os.remove( path_backup_temp )
+
+    return os.path.abspath( path_save )
+
+
+
+def st_on_expander_change( short_name_path ):
+  st.session_state.short_name_path_selected = short_name_path
+
+def rollback_arxml_doc_cfg():
+  short_name_path_selected = st.session_state.short_name_path_selected.absolute_path()
+  path_arxml_cfg = st.session_state.arxml_doc_cfg.path
+  st.session_state.arxml_doc_cfg = ARXML_DOC( path_arxml_cfg )
+  st.session_state.short_name_path_selected = st.session_state.arxml_doc_cfg.short_name_path_root.find(
+    short_name_path_selected,
+  )
+  st.session_state.arxml_cfg_dirty = False
+
+  for key in list( st.session_state.keys() ):
+    if key.startswith( 'parameter_widget:' ):
+      del st.session_state[key]
+
+def st_display_short_name_path_tree( short_name_path ):
+  if short_name_path.short_name is None:
+    for child in short_name_path.children:
+      st_display_short_name_path_tree( child )
+  else:
+    if not short_name_path.children:
+      st.button(
+        short_name_path.short_name,
+        type = 'tertiary',
+        key = short_name_path.absolute_path().replace( '/', '_' ),
+        on_click = st_on_expander_change,
+        args = ( short_name_path, )
+      )
+    else:
+      with st.expander(
+          short_name_path.short_name,
+          type = 'compact',
+          key = short_name_path.absolute_path().replace( '/', '_' ),
+          on_change = st_on_expander_change,
+          args = ( short_name_path, )
+        ):
+        for child in short_name_path.children:
+          st_display_short_name_path_tree( child )
+
+def st_display_short_name_path_ref( short_name_path, arxml_doc_cfg_spec ):
+  if short_name_path.elmt is not None:
+    if short_name_path.elmt.str_desc_ref is not None:
+      short_name_path_def_ref = arxml_doc_cfg_spec.short_name_path_root.find( short_name_path.elmt.str_desc_ref )
+      if short_name_path_def_ref is not None:
+        with st.expander( 'DEFINITION-REF : ' + short_name_path_def_ref.absolute_path(), expanded = False ):
+          elmt_disp = copy.deepcopy( short_name_path_def_ref.elmt.elmt )
+
+          elmt_sub = elmt_disp.find( 'CONTAINERS', arxml_doc_cfg_spec.ns )
+          if elmt_sub is not None:
+            elmt_disp.remove( elmt_sub )
+          elmt_sub = elmt_disp.find( 'SUB-CONTAINERS', arxml_doc_cfg_spec.ns )
+          if elmt_sub is not None:
+            elmt_disp.remove( elmt_sub )
+          # elmt_sub = elmt_disp.find( 'PARAMETERS', self.namespaces )
+          # if elmt_sub is not None:
+          #   elmt_disp.remove( elmt_sub )
+          etree.indent( elmt_disp, space = '  ' )
+          st.code( etree.tostring( elmt_disp, encoding = 'unicode' ), language = 'xml' )
+
+
+def get_info_text( info, key ):
+  if key not in info:
     return None
-  return arxml_elmt.short_name_path.short_name
+
+  value = info[key]
+  if isinstance( value, list ):
+    value = value[0]
+  if isinstance( value, dict ):
+    return value.get( '#text' )
+  return str( value )
 
 
-# Returns a simple val field for the requested info key.
-def get_arxml_elmt_info_value( arxml_elmt, key ):
-  if key == 'SHORT-NAME':
-    return get_arxml_elmt_short_name( arxml_elmt )
-  if key == 'DEFINITION-REF':
-    return arxml_elmt.str_desc_ref
-
-  elmt_value = arxml_elmt.elmt.find( key, arxml_elmt.ns )
-  if elmt_value is None:
+def get_param_help( param ):
+  desc = param.get( 'DESC' )
+  if isinstance( desc, list ):
+    desc = desc[0]
+  if not isinstance( desc, dict ):
     return None
-  return elmt_value.text
 
-
-# Yields all child parser objects referenced by the current info node.
-def iter_arxml_elmt_children( arxml_elmt ):
-  yield from arxml_elmt.elmts_sub
-
-
-# Checks whether the wrapped XML element is an ECU configuration module.
-def is_arxml_module_configuration( arxml_elmt ):
-  return etree.QName( arxml_elmt.elmt ).localname == 'ECUC-MODULE-CONFIGURATION-VALUES'
-
-# Recursively finds an ARXML element by its absolute SHORT-NAME path.
-def find_arxml_elmt_by_short_name_path( arxml_elmt, short_name_path, parent_path = '' ):
-  short_name = get_arxml_elmt_short_name( arxml_elmt )
-  current_path = parent_path
-
-  if short_name is not None:
-    current_path += '/' + short_name
-    if current_path == short_name_path:
-      return arxml_elmt
-
-  for child in iter_arxml_elmt_children( arxml_elmt ):
-    elmt_found = find_arxml_elmt_by_short_name_path( child, short_name_path, current_path )
-    if elmt_found is not None:
-      return elmt_found
-
+  value = desc.get( 'L-2' )
+  if isinstance( value, list ):
+    value = value[0]
+  if isinstance( value, dict ):
+    return value.get( '#text' )
   return None
 
-# Returns numeric constraints declared by the matching parameter definition.
-def get_dcm_number_limits( arxml_doc_spec, definition_ref, parameter_type ):
-  arxml_elmt_spec = find_arxml_elmt_by_short_name_path( arxml_doc_spec.root, definition_ref )
-  if arxml_elmt_spec is None:
-    return None, None
 
-  converter = int if parameter_type == 'integer' else float
-  values = []
-  for tag in [ 'MIN', 'MAX' ]:
-    elmt_value = arxml_elmt_spec.elmt.find( tag, arxml_elmt_spec.ns )
-    try:
-      values.append( converter( elmt_value.text, 0 ) if parameter_type == 'integer' else converter( elmt_value.text ) )
-    except ( AttributeError, TypeError, ValueError ):
-      values.append( None )
-  return values[0], values[1]
-#endregion BACK_FUNCTIONS
-
-#region FRONT_FUNCTIONS
-# Stores the selected configuration element in the Streamlit session state.
-def on_arxml_elmt_selected( arxml_elmt ):
-  st.session_state.arxml_elmt_selected = arxml_elmt
-
-# Resolves and displays the Spec definition referenced by a configuration element.
-def st_display_arxml_elmt_spec( arxml_doc_spec, arxml_elmt_cfg ):
-  definition_ref = get_arxml_elmt_info_value( arxml_elmt_cfg, 'DEFINITION-REF' )
-  if definition_ref is None:
-    with st.expander( 'None - PARAMETER-VALUES' ):
-      st.info( '선택된 항목에 DEFINITION-REF가 없습니다.' )
-    return
-
-  arxml_elmt_spec = find_arxml_elmt_by_short_name_path( arxml_doc_spec.root, definition_ref )
-  if arxml_elmt_spec is None:
-    with st.expander( definition_ref + ' - PARAMETER-VALUES', expanded = True ):
-      st.warning( 'Spec에서 DEFINITION-REF를 찾을 수 없습니다: {}'.format( definition_ref ) )
-    return
-
-  if is_arxml_module_configuration( arxml_elmt_cfg ):
-    with st.expander( 'DEFINITION-REF : ' + definition_ref ):
-      elmt_desc = arxml_elmt_spec.elmt.find( 'DESC/L-2', arxml_elmt_spec.ns )
-      if elmt_desc is None:
-        st.info( 'Spec에 DESC 정보가 없습니다.' )
-      else:
-        st.write( ''.join( elmt_desc.itertext() ).strip() )
-    return
-
-  with st.expander( 'DEFINITION-REF : ' + definition_ref, expanded = False ):
-    elmt_disp = copy.deepcopy( arxml_elmt_spec.elmt )
-    elmt_sub = elmt_disp.find( 'SUB-CONTAINERS', arxml_elmt_spec.ns )
-    if elmt_sub is not None:
-      elmt_disp.remove( elmt_sub )
-    etree.indent( elmt_disp, space = '  ' )
-    st.code( etree.tostring( elmt_disp, encoding = 'unicode' ), language = 'xml' )
-
-
-# Converts an AUTOSAR parameter VALUE into the Python type used by its widget.
-def parse_dcm_parameter_value( value_text, parameter_type ):
+def parse_parameter_value( value, parameter_type ):
   if parameter_type == 'boolean':
-    return value_text.strip().lower() in [ '1', 'true' ]
+    return value.strip().lower() in [ '1', 'true' ]
   if parameter_type == 'integer':
-    return int( value_text, 0 )
+    return int( value, 0 )
   if parameter_type == 'float':
-    return float( value_text )
-  return value_text
+    return float( value )
+  return value
 
 
-# Keeps the source ARXML's boolean and hexadecimal notation when an editor value changes.
-def format_dcm_parameter_value( value, parameter_type, original_text ):
+def format_parameter_value( value, parameter_type, original_value = '' ):
   if parameter_type == 'boolean':
-    if original_text.strip().lower() in [ 'true', 'false' ]:
-      return 'true' if bool( value ) else 'false'
-    return '1' if bool( value ) else '0'
+    if original_value.strip().lower() in [ '0', '1' ]:
+      return '1' if value else '0'
+    return 'true' if value else 'false'
   if parameter_type == 'integer':
-    if original_text.strip().lower().startswith( '0x' ):
-      return '0x{:X}'.format( int( value ) )
-    return str( int( value ) )
+    integer_value = int( value, 0 ) if isinstance( value, str ) else int( value )
+    digit_count = max( 2, len( '{:X}'.format( abs( integer_value ) ) ) )
+    sign = '-' if integer_value < 0 else ''
+    return '{}0x{:0{}X}'.format( sign, abs( integer_value ), digit_count )
   if parameter_type == 'float':
     return str( float( value ) )
   return str( value )
 
 
-# Renders DCM parameter values with one widget selected from each AUTOSAR type.
-def st_display_dcm_parameter_editor( arxml_doc_spec, arxml_elmt_cfg ):
-  definition_ref = get_arxml_elmt_info_value( arxml_elmt_cfg, 'DEFINITION-REF' )
-  if definition_ref is None or not definition_ref.startswith( '/AUTRON/Dcm/' ):
-    with st.expander( 'Not Available - PARAMETER-VALUES' ):
-      st.info( '컨테이너를 선택하면 파라미터 편집기가 표시됩니다.' )
-    return
-
-  elmt_parameter_values = arxml_elmt_cfg.elmt.find( 'PARAMETER-VALUES', arxml_elmt_cfg.ns )
+def find_parameter_value( short_name_path, definition_ref ):
+  elmt_parameter_values = short_name_path.elmt.elmt.find(
+    'PARAMETER-VALUES',
+    short_name_path.elmt.ns,
+  )
   if elmt_parameter_values is None:
-    with st.expander( definition_ref + ' - PARAMETER-VALUES' ):
-      st.info( '선택한 컨테이너에 파라미터 값이 없습니다.' )
-    return
-
-  parameter_values = {}
-  widget_config = {}
-  parameter_by_widget = {}
-  parameter_definition_by_widget = {}
-  parameter_definition_refs = set()
+    return None, None
 
   for elmt_parameter in elmt_parameter_values:
-    elmt_definition_ref = elmt_parameter.find( 'DEFINITION-REF', arxml_elmt_cfg.ns )
-    elmt_value = elmt_parameter.find( 'VALUE', arxml_elmt_cfg.ns )
-    if elmt_definition_ref is None or elmt_value is None or elmt_value.text is None:
-      continue
+    elmt_definition_ref = elmt_parameter.find( 'DEFINITION-REF', short_name_path.elmt.ns )
+    if elmt_definition_ref is not None and elmt_definition_ref.text == definition_ref:
+      return elmt_parameter_values, elmt_parameter.find( 'VALUE', short_name_path.elmt.ns )
 
-    parameter_definition_ref = elmt_definition_ref.text
-    parameter_name = parameter_definition_ref.rsplit( '/', 1 )[-1]
-    destination = elmt_definition_ref.get( 'DEST', '' )
-    parameter_definition_refs.add( parameter_definition_ref )
-
-    if destination == 'ECUC-BOOLEAN-PARAM-DEF':
-      parameter_type = 'boolean'
-    elif destination == 'ECUC-INTEGER-PARAM-DEF':
-      parameter_type = 'integer'
-    elif destination == 'ECUC-FLOAT-PARAM-DEF':
-      parameter_type = 'float'
-    elif destination == 'ECUC-FUNCTION-NAME-DEF':
-      parameter_type = 'function'
-    else:
-      continue
-
-    widget_name = parameter_name
-    suffix = 2
-    while widget_name in parameter_values:
-      widget_name = '{} ({})'.format( parameter_name, suffix )
-      suffix += 1
-
-    try:
-      parameter_values[widget_name] = parse_dcm_parameter_value( elmt_value.text, parameter_type )
-    except ValueError:
-      continue
-
-    arxml_elmt_spec = find_arxml_elmt_by_short_name_path( arxml_doc_spec.root, parameter_definition_ref )
-    help_text = None
-    if arxml_elmt_spec is not None:
-      elmt_desc = arxml_elmt_spec.elmt.find( 'DESC/L-2', arxml_elmt_spec.ns )
-      if elmt_desc is not None:
-        help_text = ''.join( elmt_desc.itertext() ).strip()
-
-    if parameter_type == 'boolean':
-      widget_config[widget_name] = {
-        'label': parameter_name,
-        'help': help_text,
-      }
-    elif parameter_type == 'function':
-      widget_config[widget_name] = {
-        'label': parameter_name,
-        'help': help_text,
-      }
-    else:
-      min_value, max_value = get_dcm_number_limits(
-        arxml_doc_spec,
-        parameter_definition_ref,
-        parameter_type,
-      )
-      widget_config[widget_name] = {
-        'label': parameter_name,
-        'help': help_text,
-        'min_value': min_value,
-        'max_value': max_value,
-        'step': 1 if parameter_type == 'integer' else None,
-        'format': '%d' if parameter_type == 'integer' else None,
-      }
-
-    parameter_by_widget[widget_name] = ( elmt_value, parameter_type, elmt_value.text )
-
-  arxml_elmt_spec = find_arxml_elmt_by_short_name_path( arxml_doc_spec.root, definition_ref )
-  if arxml_elmt_spec is not None:
-    elmt_parameters = arxml_elmt_spec.elmt.find( 'PARAMETERS', arxml_elmt_spec.ns )
-    if elmt_parameters is not None:
-      for elmt_function in elmt_parameters.findall( 'ECUC-FUNCTION-NAME-DEF', arxml_elmt_spec.ns ):
-        elmt_short_name = elmt_function.find( 'SHORT-NAME', arxml_elmt_spec.ns )
-        if elmt_short_name is None:
-          continue
-
-        parameter_name = elmt_short_name.text
-        parameter_definition_ref = definition_ref + '/' + parameter_name
-        if parameter_definition_ref in parameter_definition_refs:
-          continue
-
-        widget_name = parameter_name
-        suffix = 2
-        while widget_name in parameter_values:
-          widget_name = '{} ({})'.format( parameter_name, suffix )
-          suffix += 1
-
-        elmt_desc = elmt_function.find( 'DESC/L-2', arxml_elmt_spec.ns )
-        help_text = None
-        if elmt_desc is not None:
-          help_text = ''.join( elmt_desc.itertext() ).strip()
-
-        parameter_values[widget_name] = ''
-        widget_config[widget_name] = {
-          'label': parameter_name,
-          'help': help_text,
-        }
-        parameter_by_widget[widget_name] = ( None, 'function', '' )
-        parameter_definition_by_widget[widget_name] = parameter_definition_ref
-
-  if not parameter_values:
-    st.info( definition_ref + ' - 편집 가능한 파라미터가 없습니다.' )
-    return
-
-  with st.expander( definition_ref + ' - PARAMETER-VALUES', expanded = True ):
-    for widget_name, ( elmt_value, parameter_type, original_text ) in parameter_by_widget.items():
-      widget_key = 'dcm_parameter_widget:{}:{}'.format(
-        arxml_elmt_cfg.elmt.getroottree().getpath( arxml_elmt_cfg.elmt ),
-        widget_name,
-      )
-      if parameter_type == 'boolean':
-        edited_value = st.checkbox(
-          widget_config[widget_name]['label'],
-          value = parameter_values[widget_name],
-          help = widget_config[widget_name]['help'],
-          key = widget_key,
-        )
-      elif parameter_type == 'function':
-        edited_value = st.text_input(
-          widget_config[widget_name]['label'],
-          value = parameter_values[widget_name],
-          help = widget_config[widget_name]['help'],
-          key = widget_key,
-        )
-      else:
-        edited_value = st.number_input(
-          widget_config[widget_name]['label'],
-          value = parameter_values[widget_name],
-          min_value = widget_config[widget_name]['min_value'],
-          max_value = widget_config[widget_name]['max_value'],
-          step = widget_config[widget_name]['step'],
-          format = widget_config[widget_name]['format'],
-          help = widget_config[widget_name]['help'],
-          key = widget_key,
-        )
-
-      if elmt_value is not None:
-        elmt_value.text = format_dcm_parameter_value( edited_value, parameter_type, original_text )
-      elif str( edited_value ):
-        namespace = '{{{}}}'.format( arxml_elmt_cfg.ns[None] )
-        elmt_parameter = etree.SubElement(
-          elmt_parameter_values,
-          namespace + 'ECUC-TEXTUAL-PARAM-VALUE',
-        )
-        elmt_definition_ref = etree.SubElement( elmt_parameter, namespace + 'DEFINITION-REF' )
-        elmt_definition_ref.set( 'DEST', 'ECUC-FUNCTION-NAME-DEF' )
-        elmt_definition_ref.text = parameter_definition_by_widget[widget_name]
-        elmt_value = etree.SubElement( elmt_parameter, namespace + 'VALUE' )
-        elmt_value.text = str( edited_value )
+  return elmt_parameter_values, None
 
 
-# Recursively renders all referenced child elements in the current Streamlit container.
-def st_display_arxml_elmt_children( arxml_elmt, current_path, display_module_tree ):
-  for child in iter_arxml_elmt_children( arxml_elmt ):
-    st_display_arxml_elmt_tree( child, current_path, display_module_tree )
+def append_parameter_value( elmt_parameter_values, ns, definition_ref, parameter_type, value ):
+  namespace = '{{{}}}'.format( ns[None] )
+  str_tag = 'ECUC-TEXTUAL-PARAM-VALUE' if parameter_type == 'function' else 'ECUC-NUMERICAL-PARAM-VALUE'
+  str_dest = {
+    'boolean': 'ECUC-BOOLEAN-PARAM-DEF',
+    'integer': 'ECUC-INTEGER-PARAM-DEF',
+    'float': 'ECUC-FLOAT-PARAM-DEF',
+    'function': 'ECUC-FUNCTION-NAME-DEF',
+  }[parameter_type]
 
+  elmt_parameter = etree.SubElement( elmt_parameter_values, namespace + str_tag )
+  elmt_parameter_previous = elmt_parameter.getprevious()
+  str_indent_parameter = elmt_parameter_values.text
+  if str_indent_parameter is None:
+    str_indent_parameter = ( elmt_parameter_values.tail or '\n' ) + '  '
+    elmt_parameter_values.text = str_indent_parameter
 
-# Renders configuration modules and their descendants as nested Streamlit expanders.
-def st_display_arxml_elmt_tree( arxml_elmt, parent_path = '', display_module_tree = False ):
-  short_name = get_arxml_elmt_short_name( arxml_elmt )
-
-  if short_name is None:
-    st_display_arxml_elmt_children( arxml_elmt, parent_path, display_module_tree )
-    return
-
-  current_path = parent_path + '/' + short_name
-  display_module_tree = display_module_tree or is_arxml_module_configuration( arxml_elmt )
-
-  if display_module_tree:
-    if arxml_elmt.short_name_path.children:
-      with st.expander(
-        short_name,
-        type = 'compact',
-        key = current_path,
-        on_change = on_arxml_elmt_selected,
-        args = ( arxml_elmt, )
-      ):
-        st_display_arxml_elmt_children( arxml_elmt, current_path, display_module_tree )
-    else:
-      st.button(
-        short_name,
-        type = 'tertiary',
-        key = current_path,
-        on_click = on_arxml_elmt_selected,
-        args = ( arxml_elmt, )
-      )
+  if elmt_parameter_previous is not None:
+    str_indent_parameter_end = elmt_parameter_previous.tail
+    elmt_parameter_previous.tail = str_indent_parameter
   else:
-    st_display_arxml_elmt_children( arxml_elmt, current_path, display_module_tree )
-#endregion FRONT_FUNCTIONS
+    str_indent_parameter_end = str_indent_parameter[:-2]
 
-path_arxml_cfg_spec = 'AUTRON_AUTOSAR_Dcm_ECU_Configuration_PDF.arxml'
-path_arxml_cfg = 'Ecud_Dcm.arxml'
+  str_indent_value = str_indent_parameter + '  '
+  elmt_parameter.text = str_indent_value
+  elmt_parameter.tail = str_indent_parameter_end
+
+  elmt_definition_ref = etree.SubElement( elmt_parameter, namespace + 'DEFINITION-REF' )
+  elmt_definition_ref.set( 'DEST', str_dest )
+  elmt_definition_ref.text = definition_ref
+  elmt_definition_ref.tail = str_indent_value
+
+  elmt_value = etree.SubElement( elmt_parameter, namespace + 'VALUE' )
+  elmt_value.text = format_parameter_value( value, parameter_type )
+  elmt_value.tail = str_indent_parameter
+
+
+def st_display_short_name_path_params( short_name_path, arxml_doc_cfg_spec ):
+  if short_name_path.elmt is not None:
+    if short_name_path.elmt.str_desc_ref is not None:
+      short_name_path_def_ref = arxml_doc_cfg_spec.short_name_path_root.find( short_name_path.elmt.str_desc_ref )
+      if short_name_path_def_ref is not None:
+        with st.expander( short_name_path_def_ref.absolute_path() + ' - PARAMETERS', expanded = True ):
+          if 'PARAMETERS' in short_name_path_def_ref.elmt.info:
+            params = short_name_path_def_ref.elmt.info['PARAMETERS']
+            st.json( params, expanded = 1 )
+            parameter_types = {
+              'ECUC-BOOLEAN-PARAM-DEF': 'boolean',
+              'ECUC-INTEGER-PARAM-DEF': 'integer',
+              'ECUC-FLOAT-PARAM-DEF': 'float',
+              'ECUC-FUNCTION-NAME-DEF': 'function',
+            }
+
+            for parameter_tag, parameter_type in parameter_types.items():
+              if parameter_tag not in params:
+                continue
+
+              list_param = params[parameter_tag]
+              if not isinstance( list_param, list ):
+                list_param = [ list_param ]
+
+              for param in list_param:
+                parameter_name = get_info_text( param, 'SHORT-NAME' )
+                if parameter_name is None:
+                  continue
+
+                parameter_definition_ref = short_name_path_def_ref.absolute_path() + '/' + parameter_name
+                elmt_parameter_values, elmt_value = find_parameter_value(
+                  short_name_path,
+                  parameter_definition_ref,
+                )
+                original_value = elmt_value.text if elmt_value is not None and elmt_value.text is not None else ''
+
+                default_value = get_info_text( param, 'DEFAULT-VALUE' )
+                if default_value is None:
+                  default_value = get_info_text( param, 'MIN' )
+                if default_value is None:
+                  default_value = 'false' if parameter_type == 'boolean' else '0'
+                if parameter_type == 'function':
+                  default_value = ''
+
+                try:
+                  value = parse_parameter_value(
+                    original_value if original_value else default_value,
+                    parameter_type,
+                  )
+                except ValueError:
+                  continue
+
+                widget_key = 'parameter_widget:{}:{}'.format(
+                  short_name_path.absolute_path(),
+                  parameter_definition_ref,
+                )
+                help_text = get_param_help( param )
+                parameter_changed = False
+
+                if parameter_type == 'boolean':
+                  edited_value = st.checkbox(
+                    parameter_name,
+                    value = value,
+                    help = help_text,
+                    key = widget_key,
+                  )
+                  parameter_changed = edited_value != value
+                elif parameter_type == 'function':
+                  edited_value = st.text_input(
+                    parameter_name,
+                    value = value,
+                    help = help_text,
+                    key = widget_key,
+                  )
+                  parameter_changed = edited_value != value
+                elif parameter_type == 'integer':
+                  min_value = get_info_text( param, 'MIN' )
+                  max_value = get_info_text( param, 'MAX' )
+                  min_value = int( min_value, 0 ) if min_value is not None else None
+                  max_value = int( max_value, 0 ) if max_value is not None else None
+                  edited_value = st.number_input(
+                    parameter_name,
+                    value = value,
+                    min_value = min_value,
+                    max_value = max_value,
+                    step = 1,
+                    format = '%d',
+                    help = help_text,
+                    key = widget_key,
+                  )
+                  parameter_changed = edited_value != value
+                else:
+                  min_value = get_info_text( param, 'MIN' )
+                  max_value = get_info_text( param, 'MAX' )
+                  min_value = float( min_value ) if min_value is not None else None
+                  max_value = float( max_value ) if max_value is not None else None
+
+                  edited_value = st.number_input(
+                    parameter_name,
+                    value = value,
+                    min_value = min_value,
+                    max_value = max_value,
+                    help = help_text,
+                    key = widget_key,
+                  )
+                  parameter_changed = edited_value != value
+
+                if elmt_value is not None:
+                  if parameter_changed:
+                    elmt_value.text = format_parameter_value(
+                      edited_value,
+                      parameter_type,
+                      original_value,
+                    )
+                    st.session_state.arxml_cfg_dirty = True
+                elif elmt_parameter_values is not None:
+                  if parameter_changed or parameter_type == 'function' and edited_value:
+                    append_parameter_value(
+                      elmt_parameter_values,
+                      short_name_path.elmt.ns,
+                      parameter_definition_ref,
+                      parameter_type,
+                      edited_value,
+                    )
+                    st.session_state.arxml_cfg_dirty = True
+
+# st.checkbox
+
+        with st.expander( short_name_path_def_ref.absolute_path() + ' - REFERENCES', expanded = True ):
+          if 'REFERENCES' in short_name_path_def_ref.elmt.info:
+            refs = short_name_path_def_ref.elmt.info['REFERENCES']
+            st.json( refs, expanded = 1 )
+            if 'ECUC-REFERENCE-DEF' in refs:
+              if isinstance( refs['ECUC-REFERENCE-DEF'], list ):
+                for ref in refs['ECUC-REFERENCE-DEF']:
+                  st.button(
+                    ref['SHORT-NAME']["#text"],
+                    type = 'tertiary',
+                    help = ref['DESC']['L-2']["#text"]
+                  )
+              else:
+                ref = refs['ECUC-REFERENCE-DEF']
+                st.button(
+                  ref['SHORT-NAME']["#text"],
+                  type = 'tertiary',
+                  help = ref['DESC']['L-2']["#text"]
+                )
+
+        with st.expander( short_name_path_def_ref.absolute_path() + ' - SUB-CONTAINERS', expanded = True ):
+          if 'SUB-CONTAINERS' in short_name_path_def_ref.elmt.info:
+            st.json( short_name_path_def_ref.elmt.info['SUB-CONTAINERS'], expanded = 1 )
+            # elmts_param = short_name_path_def_ref.elmt.info['PARAMETERS'].elmts_param
+            # for elmt_param in elmts_param:
+            #   if elmt_param.short_name_path is not None:
+            #     st.write( elmt_param.short_name_path.short_name )
+
+
 
 if 'arxml_doc_cfg_spec' not in st.session_state:
+  path_arxml_cfg_spec = 'AUTRON_AUTOSAR_Dcm_ECU_Configuration_PDF.arxml'
   st.session_state.arxml_doc_cfg_spec = ARXML_DOC( path_arxml_cfg_spec )
 if 'arxml_doc_cfg' not in st.session_state:
+  path_arxml_cfg = 'Ecud_Dcm.arxml'
   st.session_state.arxml_doc_cfg = ARXML_DOC( path_arxml_cfg )
-if 'arxml_elmt_selected' not in st.session_state:
-  st.session_state.arxml_elmt_selected = None
-
-#region !<<UNUSE>>! FOR_DEBUG_TREE
-# path_info_log = os.path.join( os.path.dirname( os.path.abspath( __file__ ) ), 'arxml_info_log.txt' )
-# save_info_log(
-#   path_info_log,
-#   [
-#     { 'name': path_arxml_cfg_spec, 'info': st.session_state.arxml_doc_cfg_spec.info },
-#     { 'name': path_arxml_cfg,      'info': st.session_state.arxml_doc_cfg.info      },
-#   ]
-# )
-#endregion
+if 'short_name_path_selected' not in st.session_state:
+  st.session_state.short_name_path_selected = None
+if 'arxml_cfg_dirty' not in st.session_state:
+  st.session_state.arxml_cfg_dirty = False
 
 st.markdown(
   """
@@ -576,13 +555,22 @@ st.markdown(
     padding-bottom: 0rem !important;
     margin-top: 0rem !important;
     margin-bottom: 0rem !important;
-    padding-left: 1rem;
+    padding-left: 4px;
   }
 
   button[kind="tertiary"] {
-    padding-top: 2px !important;
-    padding-bottom: 2px !important;
+    padding-top: 1px !important;
+    padding-bottom: 1px !important;
     min-height: unset !important;
+  }
+
+  .st-key-arxml_action_bar {
+    position: sticky;
+    top: 0;
+    z-index: 10;
+    padding: 0.35rem 0.25rem;
+    background-color: var(--background-color);
+    border-bottom: 1px solid rgba(128, 128, 128, 0.25);
   }
 
   </style>
@@ -596,12 +584,42 @@ st.set_page_config( page_title = 'ARXML(AUTOSAR XML) Editor', layout = 'wide' )
 
 with view_left:
   with st.container( border = True, height = 800 ):
-    st_display_arxml_elmt_tree( st.session_state.arxml_doc_cfg.root )
+    st_display_short_name_path_tree( st.session_state.arxml_doc_cfg.short_name_path_root )
 
 with view_right:
   with st.container( border = True, height = 800 ):
-    if st.session_state.arxml_elmt_selected is not None:
-      st_display_arxml_elmt_spec( st.session_state.arxml_doc_cfg_spec, st.session_state.arxml_elmt_selected )
-      st_display_dcm_parameter_editor( st.session_state.arxml_doc_cfg_spec, st.session_state.arxml_elmt_selected )
-    else:
-      st.info( '좌측 컨테이너를 선택하세요.' )
+    if st.session_state.short_name_path_selected is not None:
+      arxml_action_bar = st.empty()
+      st_display_short_name_path_ref( st.session_state.short_name_path_selected, st.session_state.arxml_doc_cfg_spec )
+      st_display_short_name_path_params( st.session_state.short_name_path_selected, st.session_state.arxml_doc_cfg_spec )
+      with arxml_action_bar.container(
+        key = 'arxml_action_bar',
+        horizontal = True,
+        horizontal_alignment = 'right',
+        vertical_alignment = 'center',
+        gap = 'small',
+      ):
+        st.caption( '수정됨' if st.session_state.arxml_cfg_dirty else '저장됨' )
+
+        st.button(
+          'Rollback',
+          type = 'secondary',
+          icon = ':material/undo:',
+          disabled = not st.session_state.arxml_cfg_dirty,
+          key = 'rollback_arxml_cfg',
+          on_click = rollback_arxml_doc_cfg,
+        )
+
+        if st.button(
+          'Save',
+          type = 'primary',
+          icon = ':material/save:',
+          disabled = not st.session_state.arxml_cfg_dirty,
+          key = 'save_arxml_cfg',
+        ):
+          try:
+            path_saved = st.session_state.arxml_doc_cfg.save()
+            st.session_state.arxml_cfg_dirty = False
+            st.success( '저장 완료: {}'.format( path_saved ) )
+          except ( OSError, etree.LxmlError ) as error:
+            st.error( '저장 실패: {}'.format( error ) )
