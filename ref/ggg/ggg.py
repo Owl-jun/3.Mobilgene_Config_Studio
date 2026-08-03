@@ -306,10 +306,7 @@ def format_parameter_value( value, parameter_type, original_value = '' ):
     return 'true' if value else 'false'
   if parameter_type == 'integer':
     integer_value = int( value, 0 ) if isinstance( value, str ) else int( value )
-    original_value = original_value.strip().lower()
-    original_value = original_value[1:] if original_value.startswith( '-' ) else original_value
-    digit_count = len( original_value[2:] ) if original_value.startswith( '0x' ) else 2
-    digit_count = max( 2, digit_count, len( '{:X}'.format( abs( integer_value ) ) ) )
+    digit_count = max( 2, len( '{:X}'.format( abs( integer_value ) ) ) )
     sign = '-' if integer_value < 0 else ''
     return '{}0x{:0{}X}'.format( sign, abs( integer_value ), digit_count )
   if parameter_type == 'float':
