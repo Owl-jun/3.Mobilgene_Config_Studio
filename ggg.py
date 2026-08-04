@@ -134,6 +134,17 @@ class ARXML_ELMT():
           return short_name_path
     return None
 
+  def apply_info_values( self ):
+    str_tag = self.elmt.tag.replace( f'{{{self.ns[None]}}}', '' )
+    if str_tag == 'VALUE' and '#text' in self.info:
+      info_value = self.info['#text']
+      lxml_value = self.elmt.text or ''
+      if lxml_value.strip() != info_value:
+        self.elmt.text = info_value
+
+    for elmt_sub in self.elmts_sub:
+      elmt_sub.apply_info_values()
+
 
 
 
@@ -178,6 +189,7 @@ class ARXML_DOC():
     encoding = self.doc.docinfo.encoding or 'UTF-8'
 
     try:
+      self.root.apply_info_values()
       self.normalize_integer_values()
       self.doc.write(
         path_temp,
@@ -199,11 +211,6 @@ class ARXML_DOC():
 
     return os.path.abspath( path_save )
 
-
-
-def st_on_expander_change( short_name_path ):
-  st.session_state.short_name_path_selected = short_name_path
-
 def rollback_arxml_doc_cfg():
   short_name_path_selected = st.session_state.short_name_path_selected.absolute_path()
   path_arxml_cfg = st.session_state.arxml_doc_cfg.path
@@ -212,10 +219,42 @@ def rollback_arxml_doc_cfg():
     short_name_path_selected,
   )
   st.session_state.arxml_cfg_dirty = False
+  st.session_state.arxml_cfg_save = False
 
   for key in list( st.session_state.keys() ):
     if key.startswith( ( 'parameter_widget:', 'config_parameter_widget:' ) ):
       del st.session_state[key]
+
+def format_parameter_value( value, parameter_type, original_value = '' ):
+  if parameter_type == 'boolean':
+    if original_value.strip().lower() in [ '0', '1' ]:
+      return '1' if value else '0'
+    return 'true' if value else 'false'
+  if parameter_type == 'integer':
+    integer_value = int( value, 0 ) if isinstance( value, str ) else int( value )
+    digit_count = max( 2, len( '{:X}'.format( abs( integer_value ) ) ) )
+    sign = '-' if integer_value < 0 else ''
+    return '{}0x{:0{}X}'.format( sign, abs( integer_value ), digit_count )
+  if parameter_type == 'float':
+    return str( float( value ) )
+  return str( value )
+
+def st_on_expander_change( short_name_path ):
+  st.session_state.short_name_path_selected = short_name_path
+
+def st_on_parameter_change( param, parameter_type, widget_key ):
+  original_value = param['VALUE']['#text']
+  edited_value = format_parameter_value(
+    st.session_state[widget_key],
+    parameter_type,
+    original_value,
+  )
+
+  if edited_value != original_value:
+    param['VALUE']['#text'] = edited_value
+    st.session_state.arxml_cfg_dirty = True
+    st.session_state.arxml_cfg_save = False
+
 
 def st_display_short_name_path_tree( short_name_path ):
   if short_name_path.short_name is None:
@@ -261,32 +300,6 @@ def st_display_short_name_path_ref( short_name_path, arxml_doc_cfg_spec ):
           etree.indent( elmt_disp, space = '  ' )
           st.code( etree.tostring( elmt_disp, encoding = 'unicode' ), language = 'xml' )
 
-def format_parameter_value( value, parameter_type, original_value = '' ):
-  if parameter_type == 'boolean':
-    if original_value.strip().lower() in [ '0', '1' ]:
-      return '1' if value else '0'
-    return 'true' if value else 'false'
-  if parameter_type == 'integer':
-    integer_value = int( value, 0 ) if isinstance( value, str ) else int( value )
-    digit_count = max( 2, len( '{:X}'.format( abs( integer_value ) ) ) )
-    sign = '-' if integer_value < 0 else ''
-    return '{}0x{:0{}X}'.format( sign, abs( integer_value ), digit_count )
-  if parameter_type == 'float':
-    return str( float( value ) )
-  return str( value )
-
-def st_on_parameter_change( param, parameter_type, widget_key ):
-  original_value = param['VALUE']['#text']
-  edited_value = format_parameter_value(
-    st.session_state[widget_key],
-    parameter_type,
-    original_value,
-  )
-
-  if edited_value != original_value:
-    param['VALUE']['#text'] = edited_value
-    st.session_state.arxml_cfg_dirty = True
-
 def st_display_short_name_path_params( short_name_path, arxml_doc_cfg_spec ):
   if short_name_path.elmt is not None:
     if short_name_path.elmt.str_desc_ref is not None:
@@ -304,7 +317,8 @@ def st_display_short_name_path_params( short_name_path, arxml_doc_cfg_spec ):
                     min_value = int( param['MIN']["#text"], 0 ),
                     max_value = int( param['MAX']["#text"], 0 ),
                     value = int( param.get( 'DEFAULT-VALUE', param['MIN'] )["#text"], 0 ),
-                    help = param.get( 'DESC', {} ).get( 'L-2', {} ).get( "#text" )
+                    help = param.get( 'DESC', {} ).get( 'L-2', {} ).get( "#text" ),
+                    disabled = True,
                   )
               else:
                 param = params['ECUC-INTEGER-PARAM-DEF']
@@ -313,7 +327,8 @@ def st_display_short_name_path_params( short_name_path, arxml_doc_cfg_spec ):
                   min_value = int( param['MIN']["#text"], 0 ),
                   max_value = int( param['MAX']["#text"], 0 ),
                   value = int( param.get( 'DEFAULT-VALUE', param['MIN'] )["#text"], 0 ),
-                  help = param.get( 'DESC', {} ).get( 'L-2', {} ).get( "#text" )
+                  help = param.get( 'DESC', {} ).get( 'L-2', {} ).get( "#text" ),
+                  disabled = True,
                 )
             if 'ECUC-BOOLEAN-PARAM-DEF' in params:
               if isinstance( params['ECUC-BOOLEAN-PARAM-DEF'], list ):
@@ -321,14 +336,16 @@ def st_display_short_name_path_params( short_name_path, arxml_doc_cfg_spec ):
                   st.checkbox(
                     param['SHORT-NAME']["#text"],
                     value = param.get( 'DEFAULT-VALUE', { '#text': 'false' } )["#text"].lower() in [ '1', 'true' ],
-                    help = param.get( 'DESC', {} ).get( 'L-2', {} ).get( "#text" )
+                    help = param.get( 'DESC', {} ).get( 'L-2', {} ).get( "#text" ),
+                    disabled = True,
                   )
               else:
                 param = params['ECUC-BOOLEAN-PARAM-DEF']
                 st.checkbox(
                   param['SHORT-NAME']["#text"],
                   value = param.get( 'DEFAULT-VALUE', { '#text': 'false' } )["#text"].lower() in [ '1', 'true' ],
-                  help = param.get( 'DESC', {} ).get( 'L-2', {} ).get( "#text" )
+                  help = param.get( 'DESC', {} ).get( 'L-2', {} ).get( "#text" ),
+                  disabled = True,
                 )
             if 'ECUC-FUNCTION-NAME-DEF' in params:
               if isinstance( params['ECUC-FUNCTION-NAME-DEF'], list ):
@@ -336,14 +353,16 @@ def st_display_short_name_path_params( short_name_path, arxml_doc_cfg_spec ):
                   st.text_input(
                     param['SHORT-NAME']["#text"],
                     value = param.get( 'DEFAULT-VALUE', { '#text': '' } )["#text"],
-                    help = param.get( 'DESC', {} ).get( 'L-2', {} ).get( "#text" )
+                    help = param.get( 'DESC', {} ).get( 'L-2', {} ).get( "#text" ),
+                    disabled = True,
                   )
               else:
                 param = params['ECUC-FUNCTION-NAME-DEF']
                 st.text_input(
                   param['SHORT-NAME']["#text"],
                   value = param.get( 'DEFAULT-VALUE', { '#text': '' } )["#text"],
-                  help = param.get( 'DESC', {} ).get( 'L-2', {} ).get( "#text" )
+                  help = param.get( 'DESC', {} ).get( 'L-2', {} ).get( "#text" ),
+                  disabled = True,
                 )
 
         with st.expander( short_name_path.absolute_path() + ' - CONFIG PARAMETER-VALUES', expanded = True ):
@@ -448,6 +467,10 @@ if 'short_name_path_selected' not in st.session_state:
   st.session_state.short_name_path_selected = None
 if 'arxml_cfg_dirty' not in st.session_state:
   st.session_state.arxml_cfg_dirty = False
+if 'arxml_cfg_save' not in st.session_state:
+  st.session_state.arxml_cfg_save = False
+if 'save_path' not in st.session_state:
+  st.session_state.save_path = ''
 
 st.markdown(
   """
@@ -493,6 +516,46 @@ st.markdown(
 
 st.set_page_config( page_title = 'ARXML(AUTOSAR XML) Editor', layout = 'wide' )
 
+with st.container(
+  key = 'arxml_action_bar',
+  horizontal = True,
+  horizontal_alignment = 'right',
+  vertical_alignment = 'center',
+  gap = 'small',
+):
+  if st.session_state.arxml_cfg_dirty:
+    st.info( 'detected changes')
+  else:
+    if st.session_state.arxml_cfg_save:
+      st.success( 'save success -> ' + st.session_state.save_path)
+    else:
+      st.info( 'not detected any changes')
+
+  st.button(
+    'Rollback',
+    type = 'secondary',
+    icon = ':material/undo:',
+    disabled = not st.session_state.arxml_cfg_dirty,
+    key = 'rollback_arxml_cfg',
+    on_click = rollback_arxml_doc_cfg,
+  )
+
+  if st.button(
+    'Save',
+    type = 'primary',
+    icon = ':material/save:',
+    disabled = not st.session_state.arxml_cfg_dirty,
+    key = 'save_arxml_cfg',
+  ):
+    try:
+      st.session_state.save_path = st.session_state.arxml_doc_cfg.save()
+      st.session_state.arxml_cfg_dirty = False
+      #st.success( '저장 완료: {}'.format( path_saved ) )
+      st.session_state.arxml_cfg_save = True
+      st.rerun()
+    except ( OSError, etree.LxmlError ) as error:
+      st.error( '저장 실패: {}'.format( error ) )
+
 [ view_left, view_right ] = st.columns( [2, 8], width = 'stretch' )
 
 with view_left:
@@ -502,37 +565,5 @@ with view_left:
 with view_right:
   with st.container( border = True, height = 800 ):
     if st.session_state.short_name_path_selected is not None:
-      arxml_action_bar = st.empty()
       st_display_short_name_path_ref( st.session_state.short_name_path_selected, st.session_state.arxml_doc_cfg_spec )
       st_display_short_name_path_params( st.session_state.short_name_path_selected, st.session_state.arxml_doc_cfg_spec )
-      with arxml_action_bar.container(
-        key = 'arxml_action_bar',
-        horizontal = True,
-        horizontal_alignment = 'right',
-        vertical_alignment = 'center',
-        gap = 'small',
-      ):
-        st.caption( '수정됨' if st.session_state.arxml_cfg_dirty else '저장됨' )
-
-        st.button(
-          'Rollback',
-          type = 'secondary',
-          icon = ':material/undo:',
-          disabled = not st.session_state.arxml_cfg_dirty,
-          key = 'rollback_arxml_cfg',
-          on_click = rollback_arxml_doc_cfg,
-        )
-
-        if st.button(
-          'Save',
-          type = 'primary',
-          icon = ':material/save:',
-          disabled = not st.session_state.arxml_cfg_dirty,
-          key = 'save_arxml_cfg',
-        ):
-          try:
-            path_saved = st.session_state.arxml_doc_cfg.save()
-            st.session_state.arxml_cfg_dirty = False
-            st.success( '저장 완료: {}'.format( path_saved ) )
-          except ( OSError, etree.LxmlError ) as error:
-            st.error( '저장 실패: {}'.format( error ) )
