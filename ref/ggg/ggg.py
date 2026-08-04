@@ -1,6 +1,7 @@
 from lxml import etree
 import os
 
+import json
 import copy
 import shutil
 
@@ -19,6 +20,15 @@ class ARXML_Short_Name_Path():
       child.parent = self
       return self
     return NotImplemented
+
+  # def repr_with_children( self, indent = '' ):
+  #   str_repr = indent + '- ' + self.short_name
+  #   if self.children:
+  #     str_repr += '\n' + '\n'.join( child.repr_with_children( indent + '  ' ) for child in self.children )
+  #   return str_repr
+
+  # def __repr__( self ):
+  #   return self.repr_with_children()
 
   def absolute_path( self ):
     if self.parent == None:
@@ -137,6 +147,8 @@ class ARXML_DOC():
 
     self.root = ARXML_ELMT( self.elmt_root, self.ns, self.info, None )
     self.short_name_path_root = self.root.find_short_name_path_root()
+    # print( json.dumps( self.info, indent = 2 ) )
+    # print( self.info )
 
   def normalize_integer_values( self ):
     elmts_definition_ref = self.elmt_root.xpath(
