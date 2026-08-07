@@ -220,9 +220,11 @@ def rollback_arxml_doc_cfg():
   )
   st.session_state.arxml_cfg_dirty = False
   st.session_state.arxml_cfg_save = False
+  
+  st.session_state.config_parameter_widget_revision += 1
 
   for key in list( st.session_state.keys() ):
-    if key.startswith( ( 'parameter_widget:', 'config_parameter_widget:' ) ):
+    if key.startswith('config_parameter_widget:'):
       del st.session_state[key]
 
 def format_parameter_value( value, parameter_type, original_value = '' ):
@@ -254,6 +256,7 @@ def st_on_parameter_change( param, parameter_type, widget_key ):
     param['VALUE']['#text'] = edited_value
     st.session_state.arxml_cfg_dirty = True
     st.session_state.arxml_cfg_save = False
+  st.balloons()
 
 
 def st_display_short_name_path_tree( short_name_path ):
@@ -309,62 +312,63 @@ def st_display_short_name_path_params( short_name_path, arxml_doc_cfg_spec ):
           if 'PARAMETERS' in short_name_path_def_ref.elmt.info:
             params = short_name_path_def_ref.elmt.info['PARAMETERS']
             st.json( params, expanded = 1 )
-            if 'ECUC-INTEGER-PARAM-DEF' in params:
-              if isinstance( params['ECUC-INTEGER-PARAM-DEF'], list ):
-                for param in params['ECUC-INTEGER-PARAM-DEF']:
-                  st.number_input(
-                    param['SHORT-NAME']["#text"],
-                    min_value = int( param['MIN']["#text"], 0 ),
-                    max_value = int( param['MAX']["#text"], 0 ),
-                    value = int( param.get( 'DEFAULT-VALUE', param['MIN'] )["#text"], 0 ),
-                    help = param.get( 'DESC', {} ).get( 'L-2', {} ).get( "#text" ),
-                    disabled = True,
-                  )
-              else:
-                param = params['ECUC-INTEGER-PARAM-DEF']
-                st.number_input(
-                  param['SHORT-NAME']["#text"],
-                  min_value = int( param['MIN']["#text"], 0 ),
-                  max_value = int( param['MAX']["#text"], 0 ),
-                  value = int( param.get( 'DEFAULT-VALUE', param['MIN'] )["#text"], 0 ),
-                  help = param.get( 'DESC', {} ).get( 'L-2', {} ).get( "#text" ),
-                  disabled = True,
-                )
-            if 'ECUC-BOOLEAN-PARAM-DEF' in params:
-              if isinstance( params['ECUC-BOOLEAN-PARAM-DEF'], list ):
-                for param in params['ECUC-BOOLEAN-PARAM-DEF']:
-                  st.checkbox(
-                    param['SHORT-NAME']["#text"],
-                    value = param.get( 'DEFAULT-VALUE', { '#text': 'false' } )["#text"].lower() in [ '1', 'true' ],
-                    help = param.get( 'DESC', {} ).get( 'L-2', {} ).get( "#text" ),
-                    disabled = True,
-                  )
-              else:
-                param = params['ECUC-BOOLEAN-PARAM-DEF']
-                st.checkbox(
-                  param['SHORT-NAME']["#text"],
-                  value = param.get( 'DEFAULT-VALUE', { '#text': 'false' } )["#text"].lower() in [ '1', 'true' ],
-                  help = param.get( 'DESC', {} ).get( 'L-2', {} ).get( "#text" ),
-                  disabled = True,
-                )
-            if 'ECUC-FUNCTION-NAME-DEF' in params:
-              if isinstance( params['ECUC-FUNCTION-NAME-DEF'], list ):
-                for param in params['ECUC-FUNCTION-NAME-DEF']:
-                  st.text_input(
-                    param['SHORT-NAME']["#text"],
-                    value = param.get( 'DEFAULT-VALUE', { '#text': '' } )["#text"],
-                    help = param.get( 'DESC', {} ).get( 'L-2', {} ).get( "#text" ),
-                    disabled = True,
-                  )
-              else:
-                param = params['ECUC-FUNCTION-NAME-DEF']
-                st.text_input(
-                  param['SHORT-NAME']["#text"],
-                  value = param.get( 'DEFAULT-VALUE', { '#text': '' } )["#text"],
-                  help = param.get( 'DESC', {} ).get( 'L-2', {} ).get( "#text" ),
-                  disabled = True,
-                )
-
+            #region UNUSED
+            # if 'ECUC-INTEGER-PARAM-DEF' in params:
+            #   if isinstance( params['ECUC-INTEGER-PARAM-DEF'], list ):
+            #     for param in params['ECUC-INTEGER-PARAM-DEF']:
+            #       st.number_input(
+            #         param['SHORT-NAME']["#text"],
+            #         min_value = int( param['MIN']["#text"], 0 ),
+            #         max_value = int( param['MAX']["#text"], 0 ),
+            #         value = int( param.get( 'DEFAULT-VALUE', param['MIN'] )["#text"], 0 ),
+            #         help = param.get( 'DESC', {} ).get( 'L-2', {} ).get( "#text" ),
+            #         disabled = True,
+            #       )
+            #   else:
+            #     param = params['ECUC-INTEGER-PARAM-DEF']
+            #     st.number_input(
+            #       param['SHORT-NAME']["#text"],
+            #       min_value = int( param['MIN']["#text"], 0 ),
+            #       max_value = int( param['MAX']["#text"], 0 ),
+            #       value = int( param.get( 'DEFAULT-VALUE', param['MIN'] )["#text"], 0 ),
+            #       help = param.get( 'DESC', {} ).get( 'L-2', {} ).get( "#text" ),
+            #       disabled = True,
+            #     )
+            # if 'ECUC-BOOLEAN-PARAM-DEF' in params:
+            #   if isinstance( params['ECUC-BOOLEAN-PARAM-DEF'], list ):
+            #     for param in params['ECUC-BOOLEAN-PARAM-DEF']:
+            #       st.checkbox(
+            #         param['SHORT-NAME']["#text"],
+            #         value = param.get( 'DEFAULT-VALUE', { '#text': 'false' } )["#text"].lower() in [ '1', 'true' ],
+            #         help = param.get( 'DESC', {} ).get( 'L-2', {} ).get( "#text" ),
+            #         disabled = True,
+            #       )
+            #   else:
+            #     param = params['ECUC-BOOLEAN-PARAM-DEF']
+            #     st.checkbox(
+            #       param['SHORT-NAME']["#text"],
+            #       value = param.get( 'DEFAULT-VALUE', { '#text': 'false' } )["#text"].lower() in [ '1', 'true' ],
+            #       help = param.get( 'DESC', {} ).get( 'L-2', {} ).get( "#text" ),
+            #       disabled = True,
+            #     )
+            # if 'ECUC-FUNCTION-NAME-DEF' in params:
+            #   if isinstance( params['ECUC-FUNCTION-NAME-DEF'], list ):
+            #     for param in params['ECUC-FUNCTION-NAME-DEF']:
+            #       st.text_input(
+            #         param['SHORT-NAME']["#text"],
+            #         value = param.get( 'DEFAULT-VALUE', { '#text': '' } )["#text"],
+            #         help = param.get( 'DESC', {} ).get( 'L-2', {} ).get( "#text" ),
+            #         disabled = True,
+            #       )
+            #   else:
+            #     param = params['ECUC-FUNCTION-NAME-DEF']
+            #     st.text_input(
+            #       param['SHORT-NAME']["#text"],
+            #       value = param.get( 'DEFAULT-VALUE', { '#text': '' } )["#text"],
+            #       help = param.get( 'DESC', {} ).get( 'L-2', {} ).get( "#text" ),
+            #       disabled = True,
+            #     )
+            #endregion
         with st.expander( short_name_path.absolute_path() + ' - CONFIG PARAMETER-VALUES', expanded = True ):
           if 'PARAMETER-VALUES' in short_name_path.elmt.info:
             params = short_name_path.elmt.info['PARAMETER-VALUES']
@@ -384,9 +388,8 @@ def st_display_short_name_path_params( short_name_path, arxml_doc_cfg_spec ):
                 parameter_type = definition_ref['@attributes'].get( 'DEST' )
                 parameter_value = param['VALUE']['#text']
 
-                # config_parameter_widget:/AUTOSAR/...:/AUTRON/...
-                # 파라미터 이름 중복으로인한 중복 Key 생성 방지
-                widget_key = 'config_parameter_widget:{}:{}'.format(
+                widget_key = 'config_parameter_widget:{}:{}:{}'.format(
+                  st.session_state.config_parameter_widget_revision,
                   short_name_path.absolute_path(),
                   definition_ref['#text'],
                 )
@@ -457,6 +460,8 @@ def st_display_short_name_path_params( short_name_path, arxml_doc_cfg_spec ):
 
 
 
+
+
 if 'arxml_doc_cfg_spec' not in st.session_state:
   path_arxml_cfg_spec = 'AUTRON_AUTOSAR_Dcm_ECU_Configuration_PDF.arxml'
   st.session_state.arxml_doc_cfg_spec = ARXML_DOC( path_arxml_cfg_spec )
@@ -471,6 +476,8 @@ if 'arxml_cfg_save' not in st.session_state:
   st.session_state.arxml_cfg_save = False
 if 'save_path' not in st.session_state:
   st.session_state.save_path = ''
+if 'config_parameter_widget_revision' not in st.session_state:
+  st.session_state.config_parameter_widget_revision = 0
 
 st.markdown(
   """
@@ -524,12 +531,14 @@ with st.container(
   gap = 'small',
 ):
   if st.session_state.arxml_cfg_dirty:
-    st.info( 'detected changes')
+    st.info( 
+      'detected changes', icon=':material/update:'
+      )
   else:
     if st.session_state.arxml_cfg_save:
-      st.success( 'save success -> ' + st.session_state.save_path)
+      st.success( 'save success -> ' + st.session_state.save_path, icon=':material/check:')
     else:
-      st.info( 'not detected any changes')
+      st.info( 'not detected any changes', icon=':material/remove:')
 
   st.button(
     'Rollback',
